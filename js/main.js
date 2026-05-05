@@ -519,6 +519,7 @@
       '    <button class="chatbot-send" type="submit">Send</button>',
       '  </form>',
       '</div>',
+      '<div class="chatbot-hint" id="chatbotHint">Ask DIOS Assistant</div>',
       '<button type="button" class="chatbot-toggle" id="chatbotToggle" aria-label="Open DIOS assistant">',
       '  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>',
       '</button>'
@@ -529,17 +530,44 @@
     var panel = document.getElementById('chatbotPanel');
     var toggle = document.getElementById('chatbotToggle');
     var closeBtn = document.getElementById('chatbotClose');
+    var hint = document.getElementById('chatbotHint');
     var formEl = document.getElementById('chatbotForm');
     var inputEl = document.getElementById('chatbotInput');
     var messagesEl = document.getElementById('chatbotMessages');
     var chipsEl = document.getElementById('chatbotChips');
 
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function scrollMessagesToBottom() {
+      window.requestAnimationFrame(function () {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      });
+    }
+
+    function openBookingFlow() {
+      var bookingSection = document.getElementById('booking');
+      if (bookingSection) {
+        bookingSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        panel.classList.remove('open');
+        if (hint) hint.hidden = false;
+        return;
+      }
+      window.location.href = 'booking.html';
+    }
+
     function addMessage(role, content) {
       var message = document.createElement('div');
       message.className = 'chatbot-message ' + role;
-      message.innerHTML = content;
+      message.innerHTML = role === 'user' ? escapeHtml(content) : content;
       messagesEl.appendChild(message);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollMessagesToBottom();
     }
 
     function renderChips(items) {
@@ -548,12 +576,35 @@
         var chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'chatbot-chip';
-        chip.textContent = item;
+        chip.textContent = typeof item === 'string' ? item : item.label;
         chip.addEventListener('click', function () {
-          handlePrompt(item);
+          if (typeof item === 'object' && item.action === 'book') {
+            addMessage('user', item.label);
+            addMessage('bot', 'Taking you to the fastest booking route now.');
+            openBookingFlow();
+            return;
+          }
+          if (typeof item === 'object' && item.action === 'whatsapp') {
+            addMessage('user', item.label);
+            addMessage('bot', 'Opening WhatsApp so you can chat directly with DIOS.');
+            if (hint) hint.hidden = false;
+            window.open('https://wa.me/27732668348', '_blank', 'noopener,noreferrer');
+            renderChips(getDefaultChips());
+            return;
+          }
+          handlePrompt(typeof item === 'string' ? item : (item.prompt || item.label));
         });
         chipsEl.appendChild(chip);
       });
+    }
+
+    function getDefaultChips() {
+      return [
+        { label: 'Hair services', prompt: 'Hair services' },
+        { label: 'Makeup services', prompt: 'Makeup services' },
+        { label: 'Book now', action: 'book' },
+        { label: 'Pricing', prompt: 'Services pricing' }
+      ];
     }
 
     function getReply(message) {
@@ -561,63 +612,71 @@
 
       if (/book|appointment|reserve|schedule/.test(text)) {
         return {
-          answer: 'Ready to book? Use the <a href="booking.html">booking page</a> or message DIOS directly on <a href="https://wa.me/27732668348" target="_blank" rel="noopener">WhatsApp</a>. A 50% non-refundable deposit confirms the slot.',
-          chips: ['Booking policy', 'Opening hours', 'Services pricing']
+          answer: 'Ready to book? I can take you straight to the booking form or you can message DIOS directly on <a href="https://wa.me/27732668348" target="_blank" rel="noopener">WhatsApp</a>. A 50% non-refundable deposit confirms the slot.',
+          chips: [
+            { label: 'Open booking form', action: 'book' },
+            { label: 'Booking policy', prompt: 'Booking policy' },
+            { label: 'WhatsApp', action: 'whatsapp' }
+          ]
         };
       }
 
       if (/price|cost|how much|quote|pricing/.test(text)) {
         return {
           answer: 'You can view the full <a href="services.html">services and pricing list</a>. Final pricing can vary based on length, texture and complexity, especially for braids, wigs and custom styling.',
-          chips: ['Braids', 'Makeup', 'Book now']
+          chips: [
+            { label: 'Hair services', prompt: 'Hair services' },
+            { label: 'Makeup services', prompt: 'Makeup services' },
+            { label: 'Book now', action: 'book' }
+          ]
         };
       }
 
       if (/hour|open|close|time/.test(text)) {
         return {
           answer: 'Studio hours are Mon-Wed 09:00-17:30, Thu-Fri 08:00-18:00, Saturday 08:00-17:00 and Sunday 11:00-16:00. Before or after-hours appointments add R200.',
-          chips: ['Locations', 'Book now', 'Booking policy']
+          chips: ['Locations', { label: 'Book now', action: 'book' }, 'Booking policy']
         };
       }
 
       if (/where|location|midrand|copperleaf|address/.test(text)) {
         return {
           answer: 'DIOS serves clients in Midrand and Copperleaf. Midrand studio: 5 Liebenberg Road, Noordwyk. Copperleaf studio is inside Copperleaf Golf & Country Estate and is appointment only.',
-          chips: ['Opening hours', 'Book now', 'WhatsApp']
+          chips: ['Opening hours', { label: 'Book now', action: 'book' }, { label: 'WhatsApp', action: 'whatsapp' }]
         };
       }
 
       if (/policy|deposit|refund|cancel/.test(text)) {
         return {
           answer: 'A 50% non-refundable deposit is required to secure every booking. The deposit is deducted from the final amount. You can read the full <a href="policy.html">booking policy here</a>.',
-          chips: ['Book now', 'Opening hours', 'WhatsApp']
+          chips: [{ label: 'Book now', action: 'book' }, 'Opening hours', { label: 'WhatsApp', action: 'whatsapp' }]
         };
       }
 
       if (/makeup|glam|bridal|graduation|editorial/.test(text)) {
         return {
           answer: 'DIOS offers bridal makeup, events and functions glam, editorial makeup, everyday glam and graduation makeup. For exact availability or recommendations, it is best to <a href="https://wa.me/27732668348" target="_blank" rel="noopener">WhatsApp the studio</a>.',
-          chips: ['Services pricing', 'Book now', 'Locations']
+          chips: ['Services pricing', { label: 'Book now', action: 'book' }, 'Locations']
         };
       }
 
       if (/braid|cornrow|wig|ponytail|hair/.test(text)) {
         return {
           answer: 'Hair services include braids, cornrows, ponytails, wig installations, hair colour and other styling. If you already know the style you want, go straight to <a href="booking.html">Book Now</a>.',
-          chips: ['Services pricing', 'Book now', 'Booking policy']
+          chips: ['Services pricing', { label: 'Book now', action: 'book' }, 'Booking policy']
         };
       }
 
       if (/whatsapp|call|phone|contact/.test(text)) {
         return {
           answer: 'You can contact DIOS on <a href="https://wa.me/27732668348" target="_blank" rel="noopener">WhatsApp 073 266 8348</a> or call <a href="tel:0105007562">010 500 7562</a>.',
-          chips: ['Book now', 'Locations', 'Opening hours']
+          chips: [{ label: 'Book now', action: 'book' }, 'Locations', 'Opening hours']
         };
       }
 
       return {
         answer: 'I can help with bookings, pricing, locations, hours, makeup, hair services and booking policy. If you want to secure a slot, head to <a href="booking.html">Book Now</a>.',
-        chips: ['Book now', 'Services pricing', 'Opening hours', 'Locations']
+        chips: getDefaultChips()
       };
     }
 
@@ -632,13 +691,16 @@
 
     toggle.addEventListener('click', function () {
       panel.classList.toggle('open');
+      if (hint) hint.hidden = panel.classList.contains('open');
       if (panel.classList.contains('open')) {
         inputEl.focus();
+        scrollMessagesToBottom();
       }
     });
 
     closeBtn.addEventListener('click', function () {
       panel.classList.remove('open');
+      if (hint) hint.hidden = false;
     });
 
     formEl.addEventListener('submit', function (e) {
@@ -649,8 +711,8 @@
       handlePrompt(value);
     });
 
-    addMessage('bot', 'Hi, I\'m the DIOS assistant. Ask me about prices, studio hours, locations, booking policy or the best way to book.');
-    renderChips(['Book now', 'Services pricing', 'Opening hours', 'Locations']);
+    addMessage('bot', 'Hi, I\'m the DIOS assistant. Are you looking for hair or makeup today? I can also help with prices, booking policy, locations and the fastest way to book.');
+    renderChips(getDefaultChips());
   }
 
   initFaqChatbot();
