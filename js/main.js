@@ -20,11 +20,22 @@
   const navLinks   = document.getElementById('navLinks');
   const navBackdrop = document.getElementById('navBackdrop');
 
+  function lockBodyScroll() {
+    const scrollbarComp = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.setProperty('--scrollbar-comp', scrollbarComp > 0 ? scrollbarComp + 'px' : '0px');
+    document.body.classList.add('nav-open');
+  }
+
+  function unlockBodyScroll() {
+    document.body.classList.remove('nav-open');
+    document.body.style.removeProperty('--scrollbar-comp');
+  }
+
   function openNav() {
     navLinks.classList.add('open');
     navToggle.classList.add('open');
     navToggle.setAttribute('aria-expanded', 'true');
-    document.body.style.overflow = 'hidden';
+    lockBodyScroll();
     if (navBackdrop) navBackdrop.classList.add('open');
   }
 
@@ -32,29 +43,42 @@
     navLinks.classList.remove('open');
     navToggle.classList.remove('open');
     navToggle.setAttribute('aria-expanded', 'false');
-    document.body.style.overflow = '';
+    unlockBodyScroll();
     if (navBackdrop) navBackdrop.classList.remove('open');
   }
 
-  navToggle.addEventListener('click', function () {
-    navLinks.classList.contains('open') ? closeNav() : openNav();
-  });
+  if (navToggle && navLinks) {
+    navToggle.addEventListener('click', function () {
+      navLinks.classList.contains('open') ? closeNav() : openNav();
+    });
+  }
 
   if (navBackdrop) {
     navBackdrop.addEventListener('click', closeNav);
   }
 
   // Close menu when a nav link is clicked
-  navLinks.querySelectorAll('a').forEach(function (link) {
-    link.addEventListener('click', closeNav);
-  });
+  if (navLinks) {
+    navLinks.querySelectorAll('a').forEach(function (link) {
+      link.addEventListener('click', closeNav);
+    });
+  }
 
   // Close on outside click
   document.addEventListener('click', function (e) {
+    if (!navLinks || !navToggle || !navBackdrop) {
+      return;
+    }
     if (navLinks.classList.contains('open') &&
         !navLinks.contains(e.target) &&
         !navToggle.contains(e.target) &&
         !navBackdrop.contains(e.target)) {
+      closeNav();
+    }
+  });
+
+  window.addEventListener('resize', function () {
+    if (window.innerWidth > 768 && navLinks && navLinks.classList.contains('open')) {
       closeNav();
     }
   });

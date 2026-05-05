@@ -29,7 +29,11 @@
   --max-width:   1200px;
 }
 
-html { scroll-behavior: smooth; font-size: 16px; }
+html {
+  scroll-behavior: smooth;
+  font-size: 16px;
+  scrollbar-gutter: stable;
+}
 
 body {
   font-family: var(--font-sans);
@@ -37,6 +41,12 @@ body {
   color: var(--dark);
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+body.nav-open {
+  overflow: hidden;
+  padding-right: var(--scrollbar-comp, 0px);
 }
 
 img { max-width: 100%; display: block; }
@@ -243,6 +253,8 @@ ul { list-style: none; }
   border: none;
   cursor: pointer;
   padding: 0.25rem;
+  position: relative;
+  z-index: 1001;
 }
 .nav-toggle span {
   display: block;
@@ -1644,7 +1656,7 @@ ul { list-style: none; }
     gap: 2rem;
     padding: 2rem;
     transition: right 0.35s ease;
-    z-index: 999;
+    z-index: 1000;
     backdrop-filter: blur(20px);
   }
   .nav-links.open { right: 0; }
