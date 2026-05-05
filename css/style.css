@@ -33,6 +33,7 @@ html {
   scroll-behavior: smooth;
   font-size: 16px;
   scrollbar-gutter: stable;
+  overflow-x: hidden;
 }
 
 body {
@@ -42,6 +43,7 @@ body {
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+  max-width: 100%;
 }
 
 body.nav-open {
@@ -897,6 +899,10 @@ ul { list-style: none; }
   align-items: start;
 }
 
+.booking-grid > * {
+  min-width: 0;
+}
+
 .booking-info p {
   font-size: 0.95rem;
   color: #555;
@@ -1646,7 +1652,8 @@ ul { list-style: none; }
   .nav-toggle { display: flex; }
   .nav-links {
     position: fixed;
-    top: 0; right: -100%;
+    top: 0;
+    right: 0;
     width: 75%;
     max-width: 320px;
     height: 100vh;
@@ -1655,11 +1662,12 @@ ul { list-style: none; }
     justify-content: center;
     gap: 2rem;
     padding: 2rem;
-    transition: right 0.35s ease;
+    transform: translateX(110%);
+    transition: transform 0.35s ease;
     z-index: 1000;
     backdrop-filter: blur(20px);
   }
-  .nav-links.open { right: 0; }
+  .nav-links.open { transform: translateX(0); }
   .nav-links a { font-size: 0.88rem; }
   .nav-links .nav-cta { text-align: center; }
 
