@@ -136,7 +136,7 @@
     },
     'wig-installation': {
       label: 'Wig Type',
-      options: ['Full Lace Wig', 'Frontal Wig (13×4)', '360 Lace Wig', 'Closure Wig (4×4)', 'Closure Wig (5×5)'],
+      options: ['Full Lace Wig', 'Frontal Wig (13×4)', '360 Lace Wig', 'Closure Wig (4×4)', 'Closure Wig (5×5)', 'Super Double Drawn Wig'],
       showLength: false,
       info: 'Pricing varies by wig type — will be confirmed on booking',
       slots: null
@@ -218,6 +218,23 @@
       clearError('subType');
       clearError('hairLength');
     });
+
+    // Restore previously submitted values on server-rendered booking form.
+    if (window.DIOS_SERVER_BOOKING_DEFAULTS && window.DIOS_SERVER_BOOKING_DEFAULTS.service) {
+      serviceSelectEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.service;
+      updateServiceFields(serviceSelectEl.value);
+
+      if (subTypeSelectEl && window.DIOS_SERVER_BOOKING_DEFAULTS.subType) {
+        subTypeSelectEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.subType;
+      }
+
+      if (window.DIOS_SERVER_BOOKING_DEFAULTS.hairLength) {
+        var hairLengthEl = document.getElementById('hairLength');
+        if (hairLengthEl) {
+          hairLengthEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.hairLength;
+        }
+      }
+    }
   }
 
   /* ---- FORM VALIDATION & SUBMISSION ---- */
@@ -226,6 +243,8 @@
   const formSuccess = document.getElementById('formSuccess');
 
   if (form) {
+
+  var isServerSubmit = form.getAttribute('data-server-submit') === '1';
 
   function showError(fieldId, message) {
     const input = document.getElementById(fieldId);
@@ -304,6 +323,9 @@
     if (!prefDate) { showError('preferredDate', 'Please choose a preferred date.'); valid = false; }
     if (!prefTime) { showError('preferredTime', 'Please choose a preferred time.'); valid = false; }
 
+    const stylist = document.getElementById('stylist') ? document.getElementById('stylist').value : '';
+    if (!stylist) { showError('stylist', 'Please select a preferred stylist.'); valid = false; }
+
     if (!depositAgree) {
       showError('depositAgree', 'You must agree to the deposit policy to proceed.'); valid = false;
     }
@@ -312,7 +334,7 @@
   }
 
   // Live clear errors on change
-  ['firstName','lastName','phone','email','service','subType','hairLength','location','preferredDate','preferredTime'].forEach(function (id) {
+  ['firstName','lastName','phone','email','service','subType','hairLength','location','stylist','preferredDate','preferredTime'].forEach(function (id) {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', function () { clearError(id); });
   });
@@ -320,6 +342,7 @@
   // Stored WhatsApp URL — set on review step, sent on confirm
   var _pendingWaURL = '';
 
+  if (!isServerSubmit) {
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     if (!validateForm()) {
@@ -448,6 +471,7 @@
     });
   }
   }
+  }
 
   /* ---- SMOOTH ACTIVE NAV HIGHLIGHTING ---- */
   const sections  = document.querySelectorAll('section[id]');
@@ -559,7 +583,7 @@
         if (hint) hint.hidden = false;
         return;
       }
-      window.location.href = 'booking.html';
+      window.location.href = 'booking.php';
     }
 
     function addMessage(role, content) {
@@ -662,7 +686,7 @@
 
       if (/braid|cornrow|wig|ponytail|hair/.test(text)) {
         return {
-          answer: 'Hair services include braids, cornrows, ponytails, wig installations, hair colour and other styling. If you already know the style you want, go straight to <a href="booking.html">Book Now</a>.',
+          answer: 'Hair services include braids, cornrows, ponytails, wig installations, hair colour and other styling. If you already know the style you want, go straight to <a href="booking.php">Book Now</a>.',
           chips: ['Services pricing', { label: 'Book now', action: 'book' }, 'Booking policy']
         };
       }
@@ -675,7 +699,7 @@
       }
 
       return {
-        answer: 'I can help with bookings, pricing, locations, hours, makeup, hair services and booking policy. If you want to secure a slot, head to <a href="booking.html">Book Now</a>.',
+        answer: 'I can help with bookings, pricing, locations, hours, makeup, hair services and booking policy. If you want to secure a slot, head to <a href="booking.php">Book Now</a>.',
         chips: getDefaultChips()
       };
     }
