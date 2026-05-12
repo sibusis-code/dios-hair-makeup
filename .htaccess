@@ -1,0 +1,39 @@
+# DIOS Hair & Makeup - Safe xneelo .htaccess
+
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Force HTTPS
+    RewriteCond %{HTTPS} !=on
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+    # Block common sensitive paths
+    RewriteRule (^|/)\.git - [F,L,NC]
+    RewriteRule (^|/)\.env - [F,L,NC]
+    RewriteRule (^|/)\.vscode - [F,L,NC]
+    RewriteRule (^|/)node_modules - [F,L,NC]
+    RewriteRule (^|/)vendor/composer - [F,L,NC]
+</IfModule>
+
+# Block sensitive file extensions
+<FilesMatch "\.(env|ini|log|sql|bak|md|txt)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css application/javascript application/json
+</IfModule>

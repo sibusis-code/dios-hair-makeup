@@ -2,6 +2,56 @@
 // Database and PayFast configuration.
 // Update these values to match your xneelo + PayFast account.
 
+function loadDotEnv(string $filePath): void
+{
+    if (!is_file($filePath) || !is_readable($filePath)) {
+        return;
+    }
+
+    $lines = file($filePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if ($lines === false) {
+        return;
+    }
+
+    foreach ($lines as $line) {
+        $trimmed = trim($line);
+        if ($trimmed === '' || strpos($trimmed, '#') === 0) {
+            continue;
+        }
+
+        $separatorPos = strpos($trimmed, '=');
+        if ($separatorPos === false) {
+            continue;
+        }
+
+        $name = trim(substr($trimmed, 0, $separatorPos));
+        $value = trim(substr($trimmed, $separatorPos + 1));
+
+        if ($name === '') {
+            continue;
+        }
+
+        if (
+            (strlen($value) >= 2)
+            && (
+                ($value[0] === '"' && substr($value, -1) === '"')
+                || ($value[0] === '\'' && substr($value, -1) === '\'')
+            )
+        ) {
+            $value = substr($value, 1, -1);
+        }
+
+        if (getenv($name) === false) {
+            putenv($name . '=' . $value);
+            $_ENV[$name] = $value;
+            $_SERVER[$name] = $value;
+        }
+    }
+}
+
+// Load local/server .env values if present.
+loadDotEnv(__DIR__ . '/.env');
+
 function envOrDefault(string $name, string $default): string
 {
     $value = getenv($name);
@@ -41,7 +91,9 @@ function envToMoney(string $name, float $default): float
 define('DB_HOST', envOrDefault('DB_HOST', '127.0.0.1'));
 define('DB_NAME', envOrDefault('DB_NAME', 'dios_salon'));
 define('DB_USER', envOrDefault('DB_USER', 'root'));
-define('DB_PASS', envOrDefault('DB_PASS', 'Dartcom@2025'));
+// SECURITY: Database password MUST be set via environment variable
+// Never commit secrets to code. Set on production server via xneelo control panel.
+define('DB_PASS', envOrDefault('DB_PASS', ''));
 
 define('PAYFAST_MERCHANT_ID', envOrDefault('PAYFAST_MERCHANT_ID', ''));
 define('PAYFAST_MERCHANT_KEY', envOrDefault('PAYFAST_MERCHANT_KEY', ''));
@@ -75,7 +127,14 @@ define('SEND_ADMIN_EMAILS', envToBool('SEND_ADMIN_EMAILS', false));
 
 function getDbConnection(): mysqli
 {
-    $mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+    mysqli_report(MYSQLI_REPORT_OFF);
+
+    try {
+        $mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        die('Database connection failed.');
+    }
 
     if ($mysqli->connect_errno) {
         http_response_code(500);
@@ -150,14 +209,18 @@ function buildPayFastSignature(array $data, string $passphrase = ''): string
         if ($key === 'signature') {
             continue;
         }
-        if ($value === '') {
+
+        $normalized = trim((string)$value);
+        if ($normalized === '') {
             continue;
         }
-        $payload[] = $key . '=' . urlencode(trim((string)$value));
+
+        $payload[] = $key . '=' . urlencode($normalized);
     }
 
-    if ($passphrase !== '') {
-        $payload[] = 'passphrase=' . urlencode(trim($passphrase));
+    $normalizedPassphrase = trim($passphrase);
+    if ($normalizedPassphrase !== '') {
+        $payload[] = 'passphrase=' . urlencode($normalizedPassphrase);
     }
 
     return md5(implode('&', $payload));

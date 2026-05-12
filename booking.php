@@ -215,9 +215,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $payfastData = [
                 'merchant_id' => PAYFAST_MERCHANT_ID,
                 'merchant_key' => PAYFAST_MERCHANT_KEY,
-              'return_url' => getPayFastReturnUrl(),
-              'cancel_url' => getPayFastCancelUrl(),
-              'notify_url' => getPayFastNotifyUrl(),
+                'return_url' => getPayFastReturnUrl(),
+                'cancel_url' => getPayFastCancelUrl(),
+                'notify_url' => getPayFastNotifyUrl(),
                 'name_first' => $formData['firstName'],
                 'name_last' => $formData['lastName'],
                 'email_address' => $formData['email'],
@@ -230,6 +230,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'custom_str4' => $formData['location'],
                 'custom_str5' => $bookingSummary
             ];
+
+              // PayFast signature must be generated from exactly the same
+              // non-empty fields that are posted in the final form.
+              $payfastData = array_filter(
+                $payfastData,
+                static function ($value): bool {
+                  return trim((string)$value) !== '';
+                }
+              );
 
             $payfastData['signature'] = buildPayFastSignature($payfastData, PAYFAST_PASSPHRASE);
             ?>
