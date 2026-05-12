@@ -74,6 +74,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['m_payment_id'], $_GET['
                             $updateStmt->bind_param('sss', $paidStatus, $mPaymentId, $pendingStatus);
                             $updateStmt->execute();
                             $updateStmt->close();
+                            
+                            // Send payment confirmation email
+                            if (SEND_CLIENT_EMAILS) {
+                                require_once __DIR__ . '/mail-functions.php';
+                                // Get full booking details
+                                $fullStmt = $mysqli->prepare('SELECT * FROM salon_bookings WHERE m_payment_id = ? LIMIT 1');
+                                $fullStmt->bind_param('s', $mPaymentId);
+                                $fullStmt->execute();
+                                $fullResult = $fullStmt->get_result();
+                                if ($fullBooking = $fullResult->fetch_assoc()) {
+                                    sendStatusUpdateEmail($fullBooking, 'paid');
+                                }
+                                $fullStmt->close();
+                            }
                         }
 
                         $statusTitle = 'Payment Confirmed';

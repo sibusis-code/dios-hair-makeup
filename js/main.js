@@ -145,7 +145,7 @@
       label: 'Makeup Type',
       options: ['Bridal Makeup', 'Events & Functions', 'Editorial Makeup', 'Everyday Glam', 'Graduation Makeup'],
       showLength: false,
-      info: 'Makeup enquiries are handled via WhatsApp — 073 266 8348',
+      info: 'Makeup bookings are handled directly through our online booking form.',
       slots: null
     }
   };
@@ -339,137 +339,21 @@
     if (el) el.addEventListener('input', function () { clearError(id); });
   });
 
-  // Stored WhatsApp URL — set on review step, sent on confirm
-  var _pendingWaURL = '';
-
+  // Legacy non-server forms now submit to booking.php (no WhatsApp booking flow).
   if (!isServerSubmit) {
-  form.addEventListener('submit', function (e) {
-    e.preventDefault();
-    if (!validateForm()) {
-      var firstError = form.querySelector('.error');
-      if (firstError) {
-        firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        firstError.focus();
+    form.setAttribute('method', 'post');
+    form.setAttribute('action', 'booking.php');
+
+    form.addEventListener('submit', function (e) {
+      if (!validateForm()) {
+        e.preventDefault();
+        var firstError = form.querySelector('.error');
+        if (firstError) {
+          firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          firstError.focus();
+        }
       }
-      return;
-    }
-
-    // Collect form values
-    var firstName    = document.getElementById('firstName').value.trim();
-    var lastName     = document.getElementById('lastName').value.trim();
-    var phone        = document.getElementById('phone').value.trim();
-    var email        = document.getElementById('email').value.trim();
-    var serviceEl    = document.getElementById('service');
-    var service      = serviceEl.options[serviceEl.selectedIndex].text;
-    var locationEl   = document.getElementById('location');
-    var locText      = locationEl.options[locationEl.selectedIndex].text;
-    var prefDate     = document.getElementById('preferredDate').value;
-    var timeEl       = document.getElementById('preferredTime');
-    var prefTime     = timeEl.options[timeEl.selectedIndex].text;
-    var notes        = document.getElementById('notes').value.trim();
-
-    var subTypeRowEl2  = document.getElementById('subTypeRow');
-    var subTypeEl2     = document.getElementById('subType');
-    var subTypeTxt     = (subTypeRowEl2 && !subTypeRowEl2.hidden && subTypeEl2 && subTypeEl2.value)
-      ? subTypeEl2.options[subTypeEl2.selectedIndex].text : '';
-    var lengthGrpEl2   = document.getElementById('lengthGroup');
-    var hairLengthEl2  = document.getElementById('hairLength');
-    var hairLengthTxt  = (hairLengthEl2 && lengthGrpEl2 && !lengthGrpEl2.hidden && hairLengthEl2.value)
-      ? hairLengthEl2.options[hairLengthEl2.selectedIndex].text : '';
-
-    // Format date for display
-    var displayDate = prefDate;
-    try {
-      displayDate = new Date(prefDate + 'T00:00:00').toLocaleDateString('en-ZA', {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-      });
-    } catch (ex) {}
-
-    // Build WhatsApp message
-    var message = [
-      '--- DIOS Booking Request ---',
-      'Name: ' + firstName + ' ' + lastName,
-      'Phone: ' + phone,
-      email         ? 'Email: '   + email         : '',
-      'Service: '   + service,
-      subTypeTxt    ? 'Style: '   + subTypeTxt    : '',
-      hairLengthTxt ? 'Length: '  + hairLengthTxt : '',
-      'Location: '  + locText,
-      'Date: '      + prefDate,
-      'Time: '      + prefTime,
-      notes         ? 'Notes: '   + notes         : '',
-      '----------------------------',
-      'Deposit policy agreed: Yes'
-    ].filter(Boolean).join('\n');
-
-    _pendingWaURL = 'https://wa.me/27732668348?text=' + encodeURIComponent(message);
-
-    // Populate on-page summary table
-    var summaryDetails = document.getElementById('summaryDetails');
-    if (summaryDetails) {
-      var rows = [
-        ['Name',     firstName + ' ' + lastName],
-        ['Phone',    phone],
-        email         ? ['Email',    email]         : null,
-        ['Service',  service],
-        subTypeTxt    ? ['Style',    subTypeTxt]    : null,
-        hairLengthTxt ? ['Length',   hairLengthTxt] : null,
-        ['Location', locText],
-        ['Date',     displayDate],
-        ['Time',     prefTime],
-        notes         ? ['Notes',    notes]         : null
-      ].filter(Boolean);
-      summaryDetails.innerHTML = rows.map(function (r) {
-        return '<div class="summary-row"><span class="summary-key">' + r[0] + '</span><span class="summary-val">' + r[1] + '</span></div>';
-      }).join('');
-    }
-
-    // Show summary step, hide form
-    var bookingSummary = document.getElementById('bookingSummary');
-    if (bookingSummary) {
-      form.hidden = true;
-      bookingSummary.hidden = false;
-      bookingSummary.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  });
-
-  // Edit button — go back to form
-  var editBookingBtn = document.getElementById('editBookingBtn');
-  if (editBookingBtn) {
-    editBookingBtn.addEventListener('click', function () {
-      var bookingSummary = document.getElementById('bookingSummary');
-      if (bookingSummary) bookingSummary.hidden = true;
-      form.hidden = false;
-      form.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-  }
-
-  // Confirm button — open WhatsApp and show confirmed state
-  var confirmBookingBtn = document.getElementById('confirmBookingBtn');
-  if (confirmBookingBtn) {
-    confirmBookingBtn.addEventListener('click', function () {
-      window.open(_pendingWaURL, '_blank', 'noopener,noreferrer');
-      var bookingSummary  = document.getElementById('bookingSummary');
-      var bookingConfirmed = document.getElementById('bookingConfirmed');
-      if (bookingSummary)  bookingSummary.hidden  = true;
-      if (bookingConfirmed) {
-        bookingConfirmed.hidden = false;
-        bookingConfirmed.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-      form.reset();
-    });
-  }
-
-  // "Make Another Booking" button — reset everything
-  var newBookingBtn = document.getElementById('newBookingBtn');
-  if (newBookingBtn) {
-    newBookingBtn.addEventListener('click', function () {
-      var bookingConfirmed = document.getElementById('bookingConfirmed');
-      if (bookingConfirmed) bookingConfirmed.hidden = true;
-      form.hidden = false;
-      form.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  }
   }
   }
 

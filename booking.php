@@ -157,6 +157,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$insertStmt->execute()) {
             $errors[] = 'Unable to save booking. Please try again.';
+        } else {
+            // Get booking ID
+            $bookingId = $mysqli->insert_id;
+            
+            // Send confirmation email to client
+            if (SEND_CLIENT_EMAILS && $formData['email'] !== '') {
+                require_once __DIR__ . '/mail-functions.php';
+                $bookingData = [
+                    'id' => $bookingId,
+                    'name' => $fullName,
+                    'email' => $formData['email'],
+                    'phone' => $formData['phone'],
+                    'appointment_date' => $formData['preferredDate'],
+                    'appointment_time' => $appointmentTimeForDb,
+                    'service' => $formData['service'],
+                    'amount' => $amountValue,
+                    'm_payment_id' => $mPaymentId,
+                    'status' => 'pending'
+                ];
+                sendBookingConfirmation($bookingData);
+            }
+            
+            // Send admin notification
+            if (SEND_ADMIN_EMAILS) {
+                require_once __DIR__ . '/mail-functions.php';
+                $bookingData = [
+                    'id' => $bookingId,
+                    'name' => $fullName,
+                    'email' => $formData['email'],
+                    'phone' => $formData['phone'],
+                    'appointment_date' => $formData['preferredDate'],
+                    'appointment_time' => $appointmentTimeForDb,
+                    'service' => $formData['service'],
+                    'amount' => $amountValue,
+                    'm_payment_id' => $mPaymentId,
+                    'status' => 'pending'
+                ];
+                sendAdminNewBookingNotification($bookingData);
+            }
         }
         $insertStmt->close();
 
@@ -379,6 +418,8 @@ $mysqli->close();
               <span class="field-error" id="stylistError"></span>
             </div>
           </div>
+
+          <div class="service-info-banner" id="serviceInfoBanner" hidden>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
             <p id="serviceInfoText"></p>
           </div>
@@ -462,6 +503,7 @@ $mysqli->close();
         <span class="logo-sub">Hair | Make up</span>
         <p>Luxury hair and makeup studio serving Midrand &amp; Copperleaf, Gauteng.</p>
       </div>
+
       <div class="footer-links">
         <h4>Quick Links</h4>
         <ul>
@@ -469,10 +511,56 @@ $mysqli->close();
           <li><a href="about.html">About</a></li>
           <li><a href="services.html">Services &amp; Pricing</a></li>
           <li><a href="policy.html">Booking Policy</a></li>
-          <li><a href="booking.php">Book Now</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-booking-next">
+        <h4>What Happens Next</h4>
+        <ul style="font-size:0.82rem;line-height:1.7;color:#999;display:flex;flex-direction:column;gap:0.8rem;">
+          <li><strong style="color:#daa;display:block;margin-bottom:0.2rem;">1. Complete this form</strong>Submit your booking details and preferred stylist.</li>
+          <li><strong style="color:#daa;display:block;margin-bottom:0.2rem;">2. Secure payment</strong>You'll be redirected to PayFast for secure 50% deposit payment.</li>
+          <li><strong style="color:#daa;display:block;margin-bottom:0.2rem;">3. Confirmation</strong>We'll WhatsApp/email you confirmation within 2 hours with all details.</li>
+          <li><strong style="color:#daa;display:block;margin-bottom:0.2rem;">4. Arrive early</strong>Please arrive 5-10 mins early on appointment day.</li>
+        </ul>
+      </div>
+
+      <div class="footer-contact">
+        <h4>Contact &amp; Hours</h4>
+        <ul>
+          <li style="margin-bottom:1rem;">
+            <strong style="color:var(--gold);display:block;margin-bottom:0.3rem;">Midrand Studio</strong>
+            <a href="tel:+27732668348" style="color:#aaa;">073 266 8348</a><br>
+            <span style="font-size:0.78rem;color:#666;">Mon–Sat: 5am–6pm<br>Sun: Closed</span>
+          </li>
+          <li>
+            <strong style="color:var(--gold);display:block;margin-bottom:0.3rem;">Copperleaf Studio</strong>
+            <a href="tel:+27732668348" style="color:#aaa;">073 266 8348</a><br>
+            <span style="font-size:0.78rem;color:#666;">Tue–Sat: 5am–6pm<br>Sun: Closed</span>
+          </li>
+        </ul>
+        <ul style="margin-top:1.2rem;">
+          <li><a href="https://wa.me/27732668348" target="_blank" rel="noopener">WhatsApp Support</a></li>
+          <li><a href="policy.html">View Full Policy</a></li>
         </ul>
       </div>
     </div>
+
+    <div style="border-top:1px solid rgba(255,255,255,0.06);padding:2rem 0;margin:0 auto;max-width:100%;">
+      <div class="container" style="font-size:0.82rem;color:#888;">
+        <h4 style="font-family:var(--font-sans);font-size:0.7rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--gold);margin-bottom:1rem;">FAQ</h4>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2rem;">
+          <div>
+            <p><strong style="color:#aaa;">What's the deposit?</strong><br>50% of your service cost. Amount shown after service selection.</p>
+            <p style="margin-top:0.8rem;"><strong style="color:#aaa;">Can I reschedule?</strong><br>Yes, with 48 hours notice. Contact us immediately.</p>
+          </div>
+          <div>
+            <p><strong style="color:#aaa;">Are deposits refundable?</strong><br>No. Deposits are non-refundable, but can be rescheduled in emergencies.</p>
+            <p style="margin-top:0.8rem;"><strong style="color:#aaa;">Need urgent support?</strong><br>WhatsApp us anytime or call 073 266 8348.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="footer-bottom">
       <p>&copy; 2026 DIOS Hair | Makeup. All rights reserved.</p>
     </div>

@@ -606,6 +606,16 @@ ul { list-style: none; }
 .service-icon {
   font-size: 2rem;
   margin-bottom: 1rem;
+  color: var(--gold);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.service-icon svg {
+  width: 2rem;
+  height: 2rem;
+  display: block;
 }
 
 .service-card h3 {

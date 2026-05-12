@@ -1,0 +1,68 @@
+# ============================================
+# DIOS Salon CRM - Environment Configuration
+# ============================================
+# Copy this file to .env and update values
+# Or set these as environment variables in your hosting panel
+
+# DATABASE
+DB_HOST=127.0.0.1
+DB_NAME=dios_salon
+DB_USER=root
+DB_PASS=your_database_password_here
+
+# PAYFAST (Booking Payment)
+PAYFAST_MERCHANT_ID=
+PAYFAST_MERCHANT_KEY=
+PAYFAST_SANDBOX=1
+PAYFAST_PASSPHRASE=
+
+# SITE URL
+SITE_URL=https://development.mplai.co.za
+PAYFAST_NOTIFY_URL_OVERRIDE=https://development.mplai.co.za/itn.php
+
+# DEPOSIT AMOUNT
+BOOKING_DEPOSIT_AMOUNT=500.00
+
+# ============================================
+# EMAIL CONFIGURATION
+# ============================================
+
+# Enable/Disable Email Sending
+SEND_CLIENT_EMAILS=1
+SEND_ADMIN_EMAILS=1
+
+# Email Addresses
+EMAIL_FROM_NAME=DIOS Hair & Makeup
+EMAIL_FROM_ADDRESS=bookings@dios.local
+EMAIL_ADMIN_ADDRESS=admin@dios.local
+
+# SMTP Configuration (leave empty for PHP mail())
+# For xneelo: leave EMAIL_USE_SMTP=0 (PHP mail is default)
+# For Gmail/Office365: set EMAIL_USE_SMTP=1 and fill credentials
+
+EMAIL_USE_SMTP=0
+EMAIL_SMTP_HOST=smtp.gmail.com
+EMAIL_SMTP_PORT=587
+EMAIL_SMTP_USER=
+EMAIL_SMTP_PASS=
+
+# ============================================
+# NOTES
+# ============================================
+# 1. For xneelo hosting: Use PHP mail() (default)
+#    - Set EMAIL_USE_SMTP=0
+#    - Use email address on your domain
+#
+# 2. For Gmail SMTP:
+#    - Set EMAIL_USE_SMTP=1
+#    - Use 16-character App Password (not regular password)
+#    - Enable 2FA on Gmail first
+#
+# 3. Email addresses MUST be:
+#    - Valid format (bookings@yourdomain.com)
+#    - For xneelo: on your hosted domain
+#
+# 4. Test emails before going live:
+#    - Submit test booking
+#    - Check spam/junk folders
+#    - Verify all email types send correctly

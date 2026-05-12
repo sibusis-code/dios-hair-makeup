@@ -53,13 +53,25 @@ define('PAYFAST_SANDBOX', envToBool('PAYFAST_SANDBOX', true));
 define('PAYFAST_PASSPHRASE', envOrDefault('PAYFAST_PASSPHRASE', ''));
 
 // Optional override. Leave blank to auto-detect host and subfolder path.
-define('SITE_URL', envOrDefault('SITE_URL', ''));
+define('SITE_URL', envOrDefault('SITE_URL', 'https://development.mplai.co.za'));
 
-// Optional explicit notify URL for ITN (use a public HTTPS URL, not localhost).
-define('PAYFAST_NOTIFY_URL_OVERRIDE', envOrDefault('PAYFAST_NOTIFY_URL_OVERRIDE', ''));
+// Optional explicit notify URL for ITN (use a public HTTPS URL).
+define('PAYFAST_NOTIFY_URL_OVERRIDE', envOrDefault('PAYFAST_NOTIFY_URL_OVERRIDE', 'https://development.mplai.co.za/itn.php'));
 
 // Fixed deposit amount charged at checkout (server-calculated, not user-controlled).
 define('BOOKING_DEPOSIT_AMOUNT', envToMoney('BOOKING_DEPOSIT_AMOUNT', 500.00));
+
+// Email configuration
+define('EMAIL_FROM_NAME', envOrDefault('EMAIL_FROM_NAME', 'DIOS Hair & Makeup'));
+define('EMAIL_FROM_ADDRESS', envOrDefault('EMAIL_FROM_ADDRESS', 'bookings@dios.local'));
+define('EMAIL_ADMIN_ADDRESS', envOrDefault('EMAIL_ADMIN_ADDRESS', 'admin@dios.local'));
+define('EMAIL_USE_SMTP', envToBool('EMAIL_USE_SMTP', false));
+define('EMAIL_SMTP_HOST', envOrDefault('EMAIL_SMTP_HOST', 'smtp.gmail.com'));
+define('EMAIL_SMTP_PORT', (int)envOrDefault('EMAIL_SMTP_PORT', '587'));
+define('EMAIL_SMTP_USER', envOrDefault('EMAIL_SMTP_USER', ''));
+define('EMAIL_SMTP_PASS', envOrDefault('EMAIL_SMTP_PASS', ''));
+define('SEND_CLIENT_EMAILS', envToBool('SEND_CLIENT_EMAILS', false));
+define('SEND_ADMIN_EMAILS', envToBool('SEND_ADMIN_EMAILS', false));
 
 function getDbConnection(): mysqli
 {
@@ -95,13 +107,13 @@ function getSiteBaseUrl(): string
     }
 
     if (PHP_SAPI === 'cli') {
-        return 'http://localhost';
+        return 'https://development.mplai.co.za';
     }
 
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
         || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443);
     $scheme = $isHttps ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $host = $_SERVER['HTTP_HOST'] ?? 'development.mplai.co.za';
     $scriptName = $_SERVER['SCRIPT_NAME'] ?? '/';
     $basePath = str_replace('\\', '/', dirname($scriptName));
 
