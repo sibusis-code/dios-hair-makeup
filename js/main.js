@@ -87,10 +87,8 @@
   const dateInput = document.getElementById('preferredDate');
   if (dateInput) {
     const today = new Date();
-    // Minimum = tomorrow (can't book same day online)
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
-    dateInput.min = tomorrow.toISOString().split('T')[0];
+    // Minimum = today (same-day bookings allowed if time rules pass)
+    dateInput.min = today.toISOString().split('T')[0];
 
     // Max = 90 days out
     const maxDate = new Date(today);
@@ -107,6 +105,16 @@
   var timeSelectEl      = document.getElementById('preferredTime');
   var svcInfoBanner     = document.getElementById('serviceInfoBanner');
   var svcInfoText       = document.getElementById('serviceInfoText');
+  var dbBookingCatalog  = window.DIOS_BOOKING_CATALOG || null;
+  var businessInfo      = window.DIOS_BUSINESS_INFO || {};
+  var whatsappUrl       = businessInfo.whatsappUrl || 'https://wa.me/27732668348';
+  var phoneWhatsapp     = businessInfo.phoneWhatsapp || '073 266 8348';
+  var phoneCall         = businessInfo.phoneCall || phoneWhatsapp;
+  var phoneCallHref     = String(phoneCall).replace(/[^0-9+]/g, '') || '+27732668348';
+  var hoursMidrand      = businessInfo.hoursMidrand || 'Mon-Sat: 5am-6pm | Sun: Closed';
+  var hoursCopperleaf   = businessInfo.hoursCopperleaf || 'Tue-Sat: 5am-6pm | Sun: Closed';
+  var addressMidrand    = businessInfo.addressMidrand || '5 Liebenberg Road, Noordwyk';
+  var addressCopperleaf = businessInfo.addressCopperleaf || 'Copperleaf Golf & Country Estate (Appointment only)';
 
   var SERVICE_CONFIG = {
     'braids': {
@@ -134,6 +142,20 @@
       info: null,
       slots: null
     },
+    'hair-colour': {
+      label: 'Hair Colour Service',
+      options: ['Full Colour', 'Partial Highlights', 'Root Touch-up'],
+      showLength: false,
+      info: '<strong>Duration:</strong> 1–2 hours',
+      slots: null
+    },
+    'other-styling': {
+      label: 'Styling Type',
+      options: ['Blow Dry', 'Set & Curl', 'Roller Set', 'Twist-out'],
+      showLength: false,
+      info: null,
+      slots: null
+    },
     'wig-installation': {
       label: 'Wig Type',
       options: ['Full Lace Wig', 'Frontal Wig (13×4)', '360 Lace Wig', 'Closure Wig (4×4)', 'Closure Wig (5×5)', 'Super Double Drawn Wig'],
@@ -146,6 +168,20 @@
       options: ['Bridal Makeup', 'Events & Functions', 'Editorial Makeup', 'Everyday Glam', 'Graduation Makeup'],
       showLength: false,
       info: 'Makeup bookings are handled directly through our online booking form.',
+      slots: null
+    },
+    'mobile': {
+      label: 'Mobile Service Type',
+      options: ['Mobile Braids', 'Mobile Makeup'],
+      showLength: false,
+      info: '<strong>Travel fee:</strong> Additional R200',
+      slots: null
+    },
+    'other': {
+      label: 'Other Service',
+      options: ['Consultation', 'Other'],
+      showLength: false,
+      info: null,
       slots: null
     }
   };
@@ -165,6 +201,40 @@
     { value: 'before-hours', label: 'Before Hours (extra R200)' },
     { value: 'after-hours', label: 'After Hours (extra R200)' }
   ];
+
+  var STYLIST_LABELS = {};
+  var SERVICE_LOCATION_STYLISTS = {};
+
+  if (dbBookingCatalog) {
+    if (dbBookingCatalog.serviceConfig && typeof dbBookingCatalog.serviceConfig === 'object') {
+      SERVICE_CONFIG = {};
+      Object.keys(dbBookingCatalog.serviceConfig).forEach(function (serviceKey) {
+        var src = dbBookingCatalog.serviceConfig[serviceKey] || {};
+        SERVICE_CONFIG[serviceKey] = {
+          label: src.subTypeLabel || 'Style',
+          subtypes: Array.isArray(src.subtypes) ? src.subtypes : [],
+          options: Array.isArray(src.subtypes)
+            ? src.subtypes.map(function (item) { return item && item.label ? item.label : ''; }).filter(Boolean)
+            : [],
+          showLength: !!src.showLength,
+          info: src.info || null,
+          slots: Array.isArray(src.slots) && src.slots.length > 0 ? src.slots : null
+        };
+      });
+    }
+
+    if (Array.isArray(dbBookingCatalog.defaultSlots) && dbBookingCatalog.defaultSlots.length > 0) {
+      DEFAULT_SLOTS = [{ value: '', label: 'Select time…' }].concat(dbBookingCatalog.defaultSlots);
+    }
+
+    if (dbBookingCatalog.stylists && typeof dbBookingCatalog.stylists === 'object') {
+      STYLIST_LABELS = dbBookingCatalog.stylists;
+    }
+
+    if (dbBookingCatalog.serviceLocationStylists && typeof dbBookingCatalog.serviceLocationStylists === 'object') {
+      SERVICE_LOCATION_STYLISTS = dbBookingCatalog.serviceLocationStylists;
+    }
+  }
 
   function setTimeSlots(slots) {
     if (!timeSelectEl) return;
@@ -199,12 +269,22 @@
     if (subTypeLabelEl) subTypeLabelEl.textContent = config.label + ' *';
     if (subTypeSelectEl) {
       subTypeSelectEl.innerHTML = '<option value="">Select…</option>';
-      config.options.forEach(function (optText) {
-        var el = document.createElement('option');
-        el.value = optText.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        el.textContent = optText;
-        subTypeSelectEl.appendChild(el);
-      });
+      if (Array.isArray(config.subtypes) && config.subtypes.length > 0) {
+        config.subtypes.forEach(function (item) {
+          if (!item || !item.label) return;
+          var el = document.createElement('option');
+          el.value = item.key || item.label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+          el.textContent = item.label;
+          subTypeSelectEl.appendChild(el);
+        });
+      } else {
+        config.options.forEach(function (optText) {
+          var el = document.createElement('option');
+          el.value = optText.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+          el.textContent = optText;
+          subTypeSelectEl.appendChild(el);
+        });
+      }
     }
     if (subTypeRow) subTypeRow.hidden = false;
     if (lengthGroup) lengthGroup.hidden = !config.showLength;
@@ -212,27 +292,136 @@
     setTimeSlots(config.slots || null);
   }
 
+  function updateStylistOptions() {
+    var stylistSel = document.getElementById('stylist');
+    var locSel     = document.getElementById('location');
+    if (!stylistSel || !serviceSelectEl) return;
+
+    var svc = serviceSelectEl.value;
+    var loc = locSel ? locSel.value : '';
+    var serviceMap = SERVICE_LOCATION_STYLISTS[svc] || {};
+    var names = [];
+    if (loc && Array.isArray(serviceMap[loc]) && serviceMap[loc].length > 0) {
+      names = serviceMap[loc].slice();
+    } else if (Array.isArray(serviceMap.all) && serviceMap.all.length > 0) {
+      names = serviceMap.all.slice();
+    } else {
+      names = ['caro', 'emma', 'patience', 'lincy', 'charity', 'charmaine', 'pamela', 'marlyn', 'ibongiwe'];
+    }
+
+    // Save current selection to restore if still available
+    var prev = stylistSel.value;
+
+    // Clear and rebuild select safely
+    stylistSel.innerHTML = '';
+
+    // Add placeholder
+    var placeholderOpt = document.createElement('option');
+    placeholderOpt.value = '';
+    placeholderOpt.textContent = svc ? 'Select a stylist\u2026' : 'Choose service & location first';
+    stylistSel.appendChild(placeholderOpt);
+
+    // Add "No Preference" option
+    var noPrefOpt = document.createElement('option');
+    noPrefOpt.value = 'no-preference';
+    noPrefOpt.textContent = 'No Preference';
+    stylistSel.appendChild(noPrefOpt);
+
+    // Add stylist options
+    names.forEach(function (name) {
+      var opt = document.createElement('option');
+      var normalized = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      opt.value = normalized;
+      opt.textContent = STYLIST_LABELS[normalized] || STYLIST_LABELS[name] || name;
+      stylistSel.appendChild(opt);
+    });
+
+    // Try to restore previous selection if it still exists
+    if (prev && Array.from(stylistSel.options).some(function (o) { return o.value === prev; })) {
+      stylistSel.value = prev;
+    } else {
+      stylistSel.value = '';
+    }
+  }
+
   if (serviceSelectEl) {
     serviceSelectEl.addEventListener('change', function () {
       updateServiceFields(this.value);
+      updateStylistOptions();
       clearError('subType');
       clearError('hairLength');
+      clearError('stylist');
     });
 
-    // Restore previously submitted values on server-rendered booking form.
-    if (window.DIOS_SERVER_BOOKING_DEFAULTS && window.DIOS_SERVER_BOOKING_DEFAULTS.service) {
-      serviceSelectEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.service;
-      updateServiceFields(serviceSelectEl.value);
+    // Update stylist list when location changes
+    var locationSelectEl = document.getElementById('location');
+    if (locationSelectEl) {
+      locationSelectEl.addEventListener('change', function () {
+        updateStylistOptions();
+        clearError('stylist');
+      });
+    }
 
+    // Initialise stylist options on page load
+    updateStylistOptions();
+
+    // Restore previously submitted values on server-rendered booking form (on validation error).
+    if (window.DIOS_SERVER_BOOKING_DEFAULTS && Object.keys(window.DIOS_SERVER_BOOKING_DEFAULTS).length > 0) {
+      // Restore text fields
+      var textFields = ['firstName', 'lastName', 'phone', 'email', 'notes'];
+      textFields.forEach(function (id) {
+        if (window.DIOS_SERVER_BOOKING_DEFAULTS[id]) {
+          var el = document.getElementById(id);
+          if (el) el.value = window.DIOS_SERVER_BOOKING_DEFAULTS[id];
+        }
+      });
+
+      // Restore service (triggers field updates)
+      if (window.DIOS_SERVER_BOOKING_DEFAULTS.service) {
+        serviceSelectEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.service;
+        updateServiceFields(serviceSelectEl.value);
+        updateStylistOptions();
+      }
+
+      // Restore location
+      if (window.DIOS_SERVER_BOOKING_DEFAULTS.location) {
+        var locEl = document.getElementById('location');
+        if (locEl) {
+          locEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.location;
+          updateStylistOptions();
+        }
+      }
+
+      // Restore sub-type
       if (subTypeSelectEl && window.DIOS_SERVER_BOOKING_DEFAULTS.subType) {
         subTypeSelectEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.subType;
       }
 
+      // Restore hair length
       if (window.DIOS_SERVER_BOOKING_DEFAULTS.hairLength) {
         var hairLengthEl = document.getElementById('hairLength');
-        if (hairLengthEl) {
-          hairLengthEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.hairLength;
-        }
+        if (hairLengthEl) hairLengthEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.hairLength;
+      }
+
+      // Restore date & time
+      if (window.DIOS_SERVER_BOOKING_DEFAULTS.preferredDate) {
+        var dateEl = document.getElementById('preferredDate');
+        if (dateEl) dateEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.preferredDate;
+      }
+      if (window.DIOS_SERVER_BOOKING_DEFAULTS.preferredTime) {
+        if (timeSelectEl) timeSelectEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.preferredTime;
+      }
+
+      // Restore stylist
+      if (window.DIOS_SERVER_BOOKING_DEFAULTS.stylist) {
+        var stylistEl = document.getElementById('stylist');
+        if (stylistEl) stylistEl.value = window.DIOS_SERVER_BOOKING_DEFAULTS.stylist;
+      }
+
+      // Restore deposit checkbox
+      if (window.DIOS_SERVER_BOOKING_DEFAULTS.depositAgree === true || window.DIOS_SERVER_BOOKING_DEFAULTS.depositAgree === '1') {
+        var depositEl = document.getElementById('depositAgree');
+        if (depositEl) depositEl.checked = true;
       }
     }
   }
@@ -333,28 +522,51 @@
     return valid;
   }
 
+  // Display server-side validation errors on page load
+  function displayServerErrors() {
+    if (window.DIOS_SERVER_ERRORS && Array.isArray(window.DIOS_SERVER_ERRORS)) {
+      window.DIOS_SERVER_ERRORS.forEach(function (error) {
+        if (error.field && error.message) {
+          showError(error.field, error.message);
+        }
+      });
+      // Scroll to first error
+      var firstError = form.querySelector('.error');
+      if (firstError) {
+        firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }
+
   // Live clear errors on change
-  ['firstName','lastName','phone','email','service','subType','hairLength','location','stylist','preferredDate','preferredTime'].forEach(function (id) {
+  ['firstName','lastName','phone','email','service','location','subType','hairLength','stylist','preferredDate','preferredTime','depositAgree'].forEach(function (id) {
     const el = document.getElementById(id);
-    if (el) el.addEventListener('input', function () { clearError(id); });
+    if (el) {
+      el.addEventListener('change', function () { clearError(id); });
+      el.addEventListener('input', function () { clearError(id); });
+    }
   });
 
   // Legacy non-server forms now submit to booking.php (no WhatsApp booking flow).
   if (!isServerSubmit) {
     form.setAttribute('method', 'post');
     form.setAttribute('action', 'booking.php');
-
-    form.addEventListener('submit', function (e) {
-      if (!validateForm()) {
-        e.preventDefault();
-        var firstError = form.querySelector('.error');
-        if (firstError) {
-          firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          firstError.focus();
-        }
-      }
-    });
   }
+
+  // Always validate client-side before submission (catches errors inline before server round-trip)
+  form.addEventListener('submit', function (e) {
+    if (!validateForm()) {
+      e.preventDefault();
+      var firstError = form.querySelector('.error');
+      if (firstError) {
+        firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        firstError.focus();
+      }
+    }
+  });
+
+  // Display any server-side validation errors from previous submission
+  displayServerErrors();
   }
 
   /* ---- SMOOTH ACTIVE NAV HIGHLIGHTING ---- */
@@ -496,7 +708,7 @@
             addMessage('user', item.label);
             addMessage('bot', 'Opening WhatsApp so you can chat directly with DIOS.');
             if (hint) hint.hidden = false;
-            window.open('https://wa.me/27732668348', '_blank', 'noopener,noreferrer');
+            window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
             renderChips(getDefaultChips());
             return;
           }
@@ -520,7 +732,7 @@
 
       if (/book|appointment|reserve|schedule/.test(text)) {
         return {
-          answer: 'Ready to book? I can take you straight to the booking form or you can message DIOS directly on <a href="https://wa.me/27732668348" target="_blank" rel="noopener">WhatsApp</a>. A 50% non-refundable deposit confirms the slot.',
+          answer: 'Ready to book? I can take you straight to the booking form or you can message DIOS directly on <a href="' + whatsappUrl + '" target="_blank" rel="noopener">WhatsApp</a>. A 50% non-refundable deposit confirms the slot.',
           chips: [
             { label: 'Open booking form', action: 'book' },
             { label: 'Booking policy', prompt: 'Booking policy' },
@@ -542,14 +754,14 @@
 
       if (/hour|open|close|time/.test(text)) {
         return {
-          answer: 'Studio hours are Mon-Wed 09:00-17:30, Thu-Fri 08:00-18:00, Saturday 08:00-17:00 and Sunday 11:00-16:00. Before or after-hours appointments add R200.',
+          answer: 'Studio hours are Midrand: ' + hoursMidrand + '. Copperleaf: ' + hoursCopperleaf + '. Before or after-hours appointments add R200.',
           chips: ['Locations', { label: 'Book now', action: 'book' }, 'Booking policy']
         };
       }
 
       if (/where|location|midrand|copperleaf|address/.test(text)) {
         return {
-          answer: 'DIOS serves clients in Midrand and Copperleaf. Midrand studio: 5 Liebenberg Road, Noordwyk. Copperleaf studio is inside Copperleaf Golf & Country Estate and is appointment only.',
+          answer: 'DIOS serves clients in Midrand and Copperleaf. Midrand studio: ' + addressMidrand + '. Copperleaf studio: ' + addressCopperleaf + '.',
           chips: ['Opening hours', { label: 'Book now', action: 'book' }, { label: 'WhatsApp', action: 'whatsapp' }]
         };
       }
@@ -563,7 +775,7 @@
 
       if (/makeup|glam|bridal|graduation|editorial/.test(text)) {
         return {
-          answer: 'DIOS offers bridal makeup, events and functions glam, editorial makeup, everyday glam and graduation makeup. For exact availability or recommendations, it is best to <a href="https://wa.me/27732668348" target="_blank" rel="noopener">WhatsApp the studio</a>.',
+          answer: 'DIOS offers bridal makeup, events and functions glam, editorial makeup, everyday glam and graduation makeup. For exact availability or recommendations, it is best to <a href="' + whatsappUrl + '" target="_blank" rel="noopener">WhatsApp the studio</a>.',
           chips: ['Services pricing', { label: 'Book now', action: 'book' }, 'Locations']
         };
       }
@@ -577,7 +789,7 @@
 
       if (/whatsapp|call|phone|contact/.test(text)) {
         return {
-          answer: 'You can contact DIOS on <a href="https://wa.me/27732668348" target="_blank" rel="noopener">WhatsApp 073 266 8348</a> or call <a href="tel:0105007562">010 500 7562</a>.',
+          answer: 'You can contact DIOS on <a href="' + whatsappUrl + '" target="_blank" rel="noopener">WhatsApp ' + phoneWhatsapp + '</a> or call <a href="tel:' + phoneCallHref + '">' + phoneCall + '</a>.',
           chips: [{ label: 'Book now', action: 'book' }, 'Locations', 'Opening hours']
         };
       }

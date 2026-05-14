@@ -41,6 +41,32 @@ CREATE TABLE IF NOT EXISTS booking_notes (
   INDEX idx_admin_id (admin_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Temporary payment attempts table (final booking is created only after successful ITN)
+CREATE TABLE IF NOT EXISTS booking_payment_attempts (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  m_payment_id VARCHAR(100) NOT NULL,
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  email VARCHAR(150) NULL,
+  phone VARCHAR(30) NOT NULL,
+  service VARCHAR(100) NOT NULL,
+  location VARCHAR(100) NOT NULL,
+  stylist VARCHAR(100) NOT NULL,
+  sub_type VARCHAR(100) NULL,
+  hair_length VARCHAR(100) NULL,
+  preferred_date DATE NOT NULL,
+  preferred_time TIME NOT NULL,
+  notes TEXT NULL,
+  amount DECIMAL(10,2) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'initiated',
+  booking_id INT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_bpa_payment_id (m_payment_id),
+  INDEX idx_bpa_status (status),
+  INDEX idx_bpa_date_time (preferred_date, preferred_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Add CRM columns to salon_bookings in a MySQL-compatible idempotent way
 SET @col_exists = (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'salon_bookings' AND COLUMN_NAME = 'stylist_id');
 SET @sql = IF(@col_exists = 0, 'ALTER TABLE salon_bookings ADD COLUMN stylist_id INT UNSIGNED NULL', 'SELECT 1');

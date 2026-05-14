@@ -61,6 +61,27 @@ function getAdminUser(): ?array
 
 function adminLogin(string $username, string $password): bool
 {
+    startAdminSession();
+
+    // Brute force protection: max 10 attempts per session within 15 minutes.
+    $now = time();
+    $windowSeconds = 900; // 15 minutes
+    $maxAttempts = 10;
+
+    if (!isset($_SESSION['login_attempts'])) {
+        $_SESSION['login_attempts'] = [];
+    }
+
+    // Remove attempts older than the window.
+    $_SESSION['login_attempts'] = array_filter(
+        $_SESSION['login_attempts'],
+        static fn(int $t): bool => ($now - $t) < $windowSeconds
+    );
+
+    if (count($_SESSION['login_attempts']) >= $maxAttempts) {
+        return false; // Locked out — too many attempts.
+    }
+
     $mysqli = getDbConnection();
     $stmt = $mysqli->prepare('SELECT id, username, email, password_hash, first_name, last_name, role FROM admin_users WHERE username = ? AND is_active = 1');
     $stmt->bind_param('s', $username);
@@ -69,18 +90,21 @@ function adminLogin(string $username, string $password): bool
     $user = $result->fetch_assoc();
     $stmt->close();
     $mysqli->close();
-    
+
     if (!$user || !password_verify($password, $user['password_hash'])) {
+        $_SESSION['login_attempts'][] = $now; // Record failed attempt.
         return false;
     }
-    
-    startAdminSession();
+
+    // Successful login — regenerate session ID to prevent session fixation.
+    session_regenerate_id(true);
+    $_SESSION['login_attempts'] = []; // Clear failed attempts on success.
     $_SESSION['admin_id'] = (int)$user['id'];
     $_SESSION['admin_username'] = $user['username'];
     $_SESSION['admin_email'] = $user['email'];
     $_SESSION['admin_role'] = $user['role'];
     $_SESSION['last_activity'] = time();
-    
+
     return true;
 }
 
@@ -131,6 +155,90 @@ function changeAdminPassword(int $adminId, string $currentPassword, string $newP
         return ['success' => true, 'message' => 'Password changed successfully.'];
     }
     return ['success' => false, 'message' => 'Failed to update password. Please try again.'];
+}
+
+function countActiveAdminUsers(): int
+{
+    $mysqli = getDbConnection();
+    $stmt = $mysqli->prepare('SELECT COUNT(*) AS total FROM admin_users WHERE is_active = 1');
+    $stmt->execute();
+    $count = (int)$stmt->get_result()->fetch_assoc()['total'];
+    $stmt->close();
+    $mysqli->close();
+
+    return $count;
+}
+
+function getAdminUsers(): array
+{
+    $mysqli = getDbConnection();
+    $stmt = $mysqli->prepare('SELECT id, username, email, first_name, last_name, role, is_active, created_at FROM admin_users ORDER BY created_at DESC');
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $users = [];
+
+    while ($row = $result->fetch_assoc()) {
+        $users[] = $row;
+    }
+
+    $stmt->close();
+    $mysqli->close();
+
+    return $users;
+}
+
+function createAdminUser(array $payload): array
+{
+    $firstName = trim((string)($payload['first_name'] ?? ''));
+    $lastName = trim((string)($payload['last_name'] ?? ''));
+    $username = trim((string)($payload['username'] ?? ''));
+    $email = trim((string)($payload['email'] ?? ''));
+    $role = trim((string)($payload['role'] ?? 'staff'));
+    $password = (string)($payload['password'] ?? '');
+
+    if ($firstName === '' || $lastName === '' || $username === '' || $email === '' || $password === '') {
+        return ['success' => false, 'message' => 'All user fields are required.'];
+    }
+
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        return ['success' => false, 'message' => 'Email address is not valid.'];
+    }
+
+    if (strlen($password) < 8) {
+        return ['success' => false, 'message' => 'Password must be at least 8 characters long.'];
+    }
+
+    $allowedRoles = ['admin', 'manager', 'staff'];
+    if (!in_array($role, $allowedRoles, true)) {
+        $role = 'staff';
+    }
+
+    $activeUsers = countActiveAdminUsers();
+    if ($activeUsers >= getMaxAdminUsers()) {
+        return ['success' => false, 'message' => 'User limit reached. Maximum ' . getMaxAdminUsers() . ' users allowed.'];
+    }
+
+    $mysqli = getDbConnection();
+    $passwordHash = password_hash($password, PASSWORD_BCRYPT);
+    $stmt = $mysqli->prepare('INSERT INTO admin_users (username, email, password_hash, first_name, last_name, role, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)');
+    $stmt->bind_param('ssssss', $username, $email, $passwordHash, $firstName, $lastName, $role);
+    $success = $stmt->execute();
+
+    if (!$success) {
+        $errorCode = $stmt->errno;
+        $stmt->close();
+        $mysqli->close();
+
+        if ($errorCode === 1062) {
+            return ['success' => false, 'message' => 'Username or email already exists.'];
+        }
+
+        return ['success' => false, 'message' => 'Failed to create user.'];
+    }
+
+    $stmt->close();
+    $mysqli->close();
+    return ['success' => true, 'message' => 'User created successfully.'];
 }
 
 function getAllBookings(string $status = '', string $sortBy = 'appointment_date'): array
@@ -221,22 +329,43 @@ function updateBookingStatus(int $bookingId, string $newStatus): bool
 function rescheduleBooking(int $bookingId, string $newDate, string $newTime): bool
 {
     $mysqli = getDbConnection();
-    
-    // Check if slot is available
+
+    $booking = getBookingById($bookingId);
+    if (!$booking) {
+        $mysqli->close();
+        return false;
+    }
+
+    // Check total slot capacity
     $stmt = $mysqli->prepare('SELECT COUNT(*) as count FROM salon_bookings WHERE appointment_date = ? AND appointment_time = ? AND id != ? AND status = "paid"');
     $stmt->bind_param('ssi', $newDate, $newTime, $bookingId);
     $stmt->execute();
     $result = $stmt->get_result();
     $row = $result->fetch_assoc();
     $stmt->close();
-    
-    if ($row['count'] > 0) {
+
+    if ((int)$row['count'] >= getMaxStylistsPerSlot()) {
         $mysqli->close();
         return false; // Slot not available
     }
-    
+
+    // Check stylist-specific conflict if stylist selected
+    $preferredStylist = trim((string)($booking['preferred_stylist'] ?? ''));
+    if ($preferredStylist !== '' && $preferredStylist !== 'no-preference') {
+        $stylistStmt = $mysqli->prepare('SELECT COUNT(*) AS count FROM salon_bookings WHERE appointment_date = ? AND appointment_time = ? AND preferred_stylist = ? AND id != ? AND status = "paid"');
+        $stylistStmt->bind_param('sssi', $newDate, $newTime, $preferredStylist, $bookingId);
+        $stylistStmt->execute();
+        $stylistResult = $stylistStmt->get_result();
+        $stylistRow = $stylistResult->fetch_assoc();
+        $stylistStmt->close();
+
+        if ((int)$stylistRow['count'] > 0) {
+            $mysqli->close();
+            return false;
+        }
+    }
+
     // Get old booking details before update
-    $booking = getBookingById($bookingId);
     $oldDate = $booking['appointment_date'];
     $oldTime = $booking['appointment_time'];
     
@@ -347,38 +476,122 @@ function getAllStylists(): array
 function getBookingStats(): array
 {
     $mysqli = getDbConnection();
-    
     $stats = [];
-    
-    // Total bookings
+
+    // Total bookings ever
     $stmt = $mysqli->prepare('SELECT COUNT(*) as count FROM salon_bookings');
     $stmt->execute();
-    $result = $stmt->get_result();
-    $stats['total_bookings'] = $result->fetch_assoc()['count'];
+    $stats['total_bookings'] = (int)$stmt->get_result()->fetch_assoc()['count'];
     $stmt->close();
-    
-    // Pending bookings
-    $stmt = $mysqli->prepare('SELECT COUNT(*) as count FROM salon_bookings WHERE status IN ("pending", "confirmed")');
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $stats['pending_bookings'] = $result->fetch_assoc()['count'];
-    $stmt->close();
-    
-    // Total revenue
-    $stmt = $mysqli->prepare('SELECT SUM(amount) as total FROM salon_bookings WHERE status = "paid"');
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $stats['total_revenue'] = (float)($result->fetch_assoc()['total'] ?? 0);
-    $stmt->close();
-    
-    // Today's bookings
+
+    // Today's appointments (any status)
     $stmt = $mysqli->prepare('SELECT COUNT(*) as count FROM salon_bookings WHERE DATE(appointment_date) = CURDATE()');
     $stmt->execute();
-    $result = $stmt->get_result();
-    $stats['today_bookings'] = $result->fetch_assoc()['count'];
+    $stats['today_bookings'] = (int)$stmt->get_result()->fetch_assoc()['count'];
     $stmt->close();
-    
+
+    // Upcoming paid bookings (future dates, status = paid)
+    $stmt = $mysqli->prepare('SELECT COUNT(*) as count FROM salon_bookings WHERE status = "paid" AND appointment_date >= CURDATE()');
+    $stmt->execute();
+    $stats['upcoming_bookings'] = (int)$stmt->get_result()->fetch_assoc()['count'];
+    $stmt->close();
+
+    // Completed bookings
+    $stmt = $mysqli->prepare('SELECT COUNT(*) as count FROM salon_bookings WHERE status = "completed"');
+    $stmt->execute();
+    $stats['completed_bookings'] = (int)$stmt->get_result()->fetch_assoc()['count'];
+    $stmt->close();
+
+    // Total deposits collected (paid + completed)
+    $stmt = $mysqli->prepare('SELECT COALESCE(SUM(amount), 0) as total FROM salon_bookings WHERE status IN ("paid", "completed")');
+    $stmt->execute();
+    $stats['total_revenue'] = (float)$stmt->get_result()->fetch_assoc()['total'];
+    $stmt->close();
+
+    // This week's paid bookings (Mon–Sun)
+    $stmt = $mysqli->prepare('SELECT COUNT(*) as count FROM salon_bookings WHERE status IN ("paid","completed") AND YEARWEEK(appointment_date, 1) = YEARWEEK(CURDATE(), 1)');
+    $stmt->execute();
+    $stats['this_week_bookings'] = (int)$stmt->get_result()->fetch_assoc()['count'];
+    $stmt->close();
+
     $mysqli->close();
-    
     return $stats;
+}
+
+function getTodaysBookings(): array
+{
+    $mysqli = getDbConnection();
+    $stmt = $mysqli->prepare(
+        'SELECT b.*, s.name as stylist_name FROM salon_bookings b
+         LEFT JOIN stylists s ON b.stylist_id = s.id
+         WHERE DATE(b.appointment_date) = CURDATE()
+         ORDER BY b.appointment_time ASC'
+    );
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $rows = [];
+    while ($row = $result->fetch_assoc()) {
+        $rows[] = $row;
+    }
+    $stmt->close();
+    $mysqli->close();
+    return $rows;
+}
+
+function getSlotOverviewForDate(string $date): array
+{
+    $slotMap = [
+        '07:30:00' => '07:30 AM',
+        '08:00:00' => '08:00 AM',
+        '09:00:00' => '09:00 AM',
+        '10:00:00' => '10:00 AM',
+        '11:00:00' => '11:00 AM',
+        '11:30:00' => '11:30 AM',
+        '12:00:00' => '12:00 PM',
+        '13:00:00' => '01:00 PM',
+        '14:00:00' => '02:00 PM',
+        '14:30:00' => '02:30 PM',
+        '15:00:00' => '03:00 PM',
+        '16:00:00' => '04:00 PM',
+        '17:00:00' => '05:00 PM',
+        '18:00:00' => '06:00 PM'
+    ];
+
+    $overview = [];
+    foreach ($slotMap as $dbTime => $label) {
+        $overview[$dbTime] = [
+            'time_db' => $dbTime,
+            'time_label' => $label,
+            'booked' => 0,
+            'open' => getMaxStylistsPerSlot(),
+            'stylists' => []
+        ];
+    }
+
+    $mysqli = getDbConnection();
+    $status = 'paid';
+    $stmt = $mysqli->prepare('SELECT appointment_time, preferred_stylist FROM salon_bookings WHERE appointment_date = ? AND status = ? ORDER BY appointment_time ASC');
+    $stmt->bind_param('ss', $date, $status);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    while ($row = $result->fetch_assoc()) {
+        $time = (string)$row['appointment_time'];
+        if (!isset($overview[$time])) {
+            continue;
+        }
+
+        $overview[$time]['booked']++;
+        $overview[$time]['open'] = max(0, getMaxStylistsPerSlot() - $overview[$time]['booked']);
+
+        $stylist = trim((string)($row['preferred_stylist'] ?? ''));
+        if ($stylist !== '') {
+            $overview[$time]['stylists'][] = $stylist;
+        }
+    }
+
+    $stmt->close();
+    $mysqli->close();
+
+    return array_values($overview);
 }

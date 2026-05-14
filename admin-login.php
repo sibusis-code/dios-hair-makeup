@@ -13,24 +13,33 @@ if (isAdminLoggedIn()) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
-    
+
     if ($username === '') {
         $errors[] = 'Username is required.';
     }
-    
+
     if ($password === '') {
         $errors[] = 'Password is required.';
     }
-    
+
     if (empty($errors)) {
-        if (adminLogin($username, $password)) {
+        startAdminSession();
+        // Check if currently locked out before even trying.
+        $now = time();
+        $recentAttempts = array_filter(
+            $_SESSION['login_attempts'] ?? [],
+            static fn(int $t): bool => ($now - $t) < 900
+        );
+        if (count($recentAttempts) >= 10) {
+            $errors[] = 'Too many failed attempts. Please wait 15 minutes before trying again.';
+        } elseif (adminLogin($username, $password)) {
             header('Location: admin-dashboard.php');
             exit;
         } else {
             $errors[] = 'Invalid username or password.';
         }
     }
-    
+
     $email = htmlspecialchars($username, ENT_QUOTES, 'UTF-8');
 }
 ?>

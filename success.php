@@ -1,118 +1,77 @@
-<?php
+﻿<?php
+/**
+ * success.php - PayFast browser return page.
+ *
+ * PRODUCTION RULE: This page is DISPLAY-ONLY.
+ * All DB writes (booking finalization) are handled exclusively by itn.php (server-to-server ITN).
+ * This page only reads the DB to show the correct status message to the client.
+ */
 require_once __DIR__ . '/config.php';
 
-$statusTitle = 'Payment Received';
-$statusMessage = 'Thank you. Your payment was received. We are finalizing your booking confirmation.';
+$statusTitle   = 'Payment Received';
+$statusMessage = 'Thank you. Your payment was received. We are confirming your booking - this usually takes a few seconds.';
 $statusVariant = 'ok';
 
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['m_payment_id'], $_GET['signature'])) {
-    $pfData = $_GET;
-    $postedSignature = (string)($pfData['signature'] ?? '');
+if (isset($_GET['m_payment_id'])) {
+    $mPaymentId = trim((string)$_GET['m_payment_id']);
 
-    unset($pfData['signature']);
-    $generatedSignature = buildPayFastSignature($pfData, PAYFAST_PASSPHRASE);
+    if ($mPaymentId !== '') {
+        try {
+            $mysqli = getDbConnection();
 
-    if (!hash_equals($generatedSignature, $postedSignature)) {
-        $statusTitle = 'Payment Verification Pending';
-        $statusMessage = 'We received your return but could not verify the payment signature. Please contact support with your reference.';
-        $statusVariant = 'warn';
-    } else {
-        // Validate returned data with PayFast before updating status.
-        $validatePayload = $_GET;
-        if (PAYFAST_PASSPHRASE !== '') {
-            $validatePayload['passphrase'] = PAYFAST_PASSPHRASE;
-        }
+            // Check if ITN already finalized the booking (the happy path).
+            $bookingStmt = $mysqli->prepare(
+                'SELECT id FROM salon_bookings WHERE m_payment_id = ? AND status = ? LIMIT 1'
+            );
+            $paidStatus = 'paid';
+            $bookingStmt->bind_param('ss', $mPaymentId, $paidStatus);
+            $bookingStmt->execute();
+            $bookingResult = $bookingStmt->get_result();
+            $existingBooking = $bookingResult->fetch_assoc();
+            $bookingStmt->close();
 
-        $ch = curl_init(getPayFastValidateUrl());
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => http_build_query($validatePayload),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER => false,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded']
-        ]);
-
-        $pfResponse = curl_exec($ch);
-        $curlError = curl_error($ch);
-        curl_close($ch);
-
-        if ($pfResponse === false || stripos((string)$pfResponse, 'VALID') === false) {
-            error_log('PayFast success-page validation failed: ' . $curlError);
-            $statusTitle = 'Payment Verification Pending';
-            $statusMessage = 'Payment return received, but online verification is still pending. Your booking remains pending until verification completes.';
-            $statusVariant = 'warn';
-        } else {
-            $paymentStatus = (string)($_GET['payment_status'] ?? '');
-            $mPaymentId = (string)$_GET['m_payment_id'];
-            $grossAmount = isset($_GET['amount_gross']) ? (float)$_GET['amount_gross'] : null;
-
-            if ($paymentStatus === 'COMPLETE') {
-                $mysqli = getDbConnection();
-
-                $bookingStmt = $mysqli->prepare('SELECT amount, status FROM salon_bookings WHERE m_payment_id = ? LIMIT 1');
-                $bookingStmt->bind_param('s', $mPaymentId);
-                $bookingStmt->execute();
-                $bookingResult = $bookingStmt->get_result();
-                $booking = $bookingResult->fetch_assoc();
-                $bookingStmt->close();
-
-                if ($booking) {
-                    $amountMatches = true;
-                    if ($grossAmount !== null) {
-                        $dbAmount = (float)$booking['amount'];
-                        $amountMatches = abs($dbAmount - $grossAmount) <= 0.01;
-                    }
-
-                    if ($amountMatches) {
-                        if ($booking['status'] !== 'paid') {
-                            $paidStatus = 'paid';
-                            $pendingStatus = 'pending';
-
-                            $updateStmt = $mysqli->prepare('UPDATE salon_bookings SET status = ? WHERE m_payment_id = ? AND status = ?');
-                            $updateStmt->bind_param('sss', $paidStatus, $mPaymentId, $pendingStatus);
-                            $updateStmt->execute();
-                            $updateStmt->close();
-                            
-                            // Send payment confirmation email
-                            if (SEND_CLIENT_EMAILS) {
-                                require_once __DIR__ . '/mail-functions.php';
-                                // Get full booking details
-                                $fullStmt = $mysqli->prepare('SELECT * FROM salon_bookings WHERE m_payment_id = ? LIMIT 1');
-                                $fullStmt->bind_param('s', $mPaymentId);
-                                $fullStmt->execute();
-                                $fullResult = $fullStmt->get_result();
-                                if ($fullBooking = $fullResult->fetch_assoc()) {
-                                    sendStatusUpdateEmail($fullBooking, 'paid');
-                                }
-                                $fullStmt->close();
-                            }
-                        }
-
-                        $statusTitle = 'Payment Confirmed';
-                        $statusMessage = 'Your payment is verified and your booking has been marked as paid.';
-                        $statusVariant = 'ok';
-                    } else {
-                        error_log('PayFast success amount mismatch for m_payment_id ' . $mPaymentId);
-                        $statusTitle = 'Payment Verification Pending';
-                        $statusMessage = 'Payment returned, but amount verification failed. Please contact support with your booking reference.';
-                        $statusVariant = 'warn';
-                    }
-                } else {
-                    $statusTitle = 'Booking Record Not Found';
-                    $statusMessage = 'Payment return received, but no booking record was found. Please contact support with your payment reference.';
-                    $statusVariant = 'warn';
-                }
-
-                $mysqli->close();
+            if ($existingBooking) {
+                $statusTitle   = 'Booking Confirmed';
+                $statusMessage = 'Your payment is verified and your appointment is booked. See you soon!';
+                $statusVariant = 'ok';
             } else {
-                $statusTitle = 'Payment Not Completed';
-                $statusMessage = 'You returned from PayFast, but the transaction is not marked complete yet.';
-                $statusVariant = 'warn';
+                // ITN may not have fired yet - check the attempt record.
+                $attemptStmt = $mysqli->prepare(
+                    'SELECT status FROM booking_payment_attempts WHERE m_payment_id = ? LIMIT 1'
+                );
+                $attemptStmt->bind_param('s', $mPaymentId);
+                $attemptStmt->execute();
+                $attemptResult = $attemptStmt->get_result();
+                $attempt = $attemptResult->fetch_assoc();
+                $attemptStmt->close();
+
+                if ($attempt && ($attempt['status'] ?? '') === 'paid') {
+                    $statusTitle   = 'Booking Confirmed';
+                    $statusMessage = 'Your payment is verified and your appointment is booked. See you soon!';
+                    $statusVariant = 'ok';
+                } elseif ($attempt && ($attempt['status'] ?? '') === 'failed') {
+                    $statusTitle   = 'Slot No Longer Available';
+                    $statusMessage = 'Your payment was received, but that time slot was taken by someone else. Please contact us to reschedule or for a refund.';
+                    $statusVariant = 'warn';
+                } else {
+                    // ITN pending - do NOT write anything here; just inform the client.
+                    $statusTitle   = 'Payment Received';
+                    $statusMessage = 'Your payment was received. Booking confirmation is being processed and will be ready shortly. Keep your reference number below.';
+                    $statusVariant = 'ok';
+                }
             }
+
+            $mysqli->close();
+        } catch (Throwable $e) {
+            error_log('[success.php] DB error for m_payment_id=' . $mPaymentId . ': ' . $e->getMessage());
+            $statusTitle   = 'Payment Received';
+            $statusMessage = 'Your payment was received. If you do not receive a confirmation shortly, please contact us with your reference number.';
+            $statusVariant = 'ok';
         }
     }
+
+    // Log: browser return for audit trail (no DB writes).
+    error_log('[success.php] Browser return m_payment_id=' . ($mPaymentId ?? 'none') . ' status=' . $statusTitle);
 }
 ?>
 <!DOCTYPE html>

@@ -1,20 +1,81 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/admin-functions.php';
 
 requireAdminLogin();
-$admin = getAdminUser();
-$bookings = getAllBookings();
-$stats = getBookingStats();
-$stylists = getAllStylists();
+$admin    = getAdminUser();
+$stats    = getBookingStats();
+$today    = getTodaysBookings();
+$todaySlotOverview = getSlotOverviewForDate(date('Y-m-d'));
 
-// Filter bookings
-$statusFilter = $_GET['status'] ?? '';
-$filteredBookings = $bookings;
+$view     = $_GET['view'] ?? 'upcoming';
+$search   = trim($_GET['q'] ?? '');
 
-if ($statusFilter !== '') {
-    $filteredBookings = array_filter($bookings, function($b) use ($statusFilter) {
-        return $b['status'] === $statusFilter;
+$allowedViews = ['all', 'upcoming', 'today', 'completed', 'cancelled'];
+if (!in_array($view, $allowedViews, true)) {
+    $view = 'upcoming';
+}
+
+// Build bookings list for current view
+switch ($view) {
+    case 'today':
+        $bookings = $today;
+        $viewLabel = "Today's Appointments";
+        break;
+    case 'upcoming':
+        $all = getAllBookings('paid');
+        $bookings = array_filter($all, fn($b) => $b['appointment_date'] >= date('Y-m-d'));
+        usort($bookings, fn($a, $b) => strcmp($a['appointment_date'] . $a['appointment_time'], $b['appointment_date'] . $b['appointment_time']));
+        $viewLabel = 'Upcoming Appointments';
+        break;
+    case 'completed':
+        $bookings = getAllBookings('completed');
+        $viewLabel = 'Completed Appointments';
+        break;
+    case 'cancelled':
+        $bookings = getAllBookings('cancelled');
+        $viewLabel = 'Cancelled Bookings';
+        break;
+    default:
+        $bookings = getAllBookings();
+        $viewLabel = 'All Bookings';
+        break;
+}
+
+// Search filter
+if ($search !== '') {
+    $s = strtolower($search);
+    $bookings = array_filter($bookings, function ($b) use ($s) {
+        return str_contains(strtolower((string)($b['name'] ?? '')), $s)
+            || str_contains(strtolower((string)($b['phone'] ?? '')), $s)
+            || str_contains(strtolower((string)($b['email'] ?? '')), $s)
+            || str_contains(strtolower((string)($b['m_payment_id'] ?? '')), $s);
     });
+}
+
+// Handle quick status update (mark complete)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_complete'])) {
+    $bid = (int)($_POST['booking_id'] ?? 0);
+    if ($bid > 0) {
+        updateBookingStatus($bid, 'completed');
+    }
+    $qs = http_build_query(['view' => $view, 'q' => $search]);
+    header('Location: admin-dashboard.php?' . $qs);
+    exit;
+}
+
+$exportUrl = 'admin-export-csv.php?' . http_build_query(['view' => $view, 'q' => $search]);
+
+function statusBadge(string $status): string
+{
+    $map = [
+        'paid'      => ['#d1fae5', '#065f46', 'Paid'],
+        'completed' => ['#dbeafe', '#1e40af', 'Completed'],
+        'cancelled' => ['#fee2e2', '#991b1b', 'Cancelled'],
+        'pending'   => ['#fef9c3', '#92400e', 'Pending'],
+        'confirmed' => ['#e0e7ff', '#3730a3', 'Confirmed'],
+    ];
+    $c = $map[$status] ?? ['#f3f4f6', '#374151', ucfirst($status)];
+    return '<span style="background:' . $c[0] . ';color:' . $c[1] . ';padding:0.2rem 0.65rem;border-radius:99px;font-size:0.75rem;font-weight:600;white-space:nowrap;">' . htmlspecialchars($c[2], ENT_QUOTES, 'UTF-8') . '</span>';
 }
 ?>
 <!DOCTYPE html>
@@ -22,461 +83,776 @@ if ($statusFilter !== '') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - DIOS CRM</title>
-    <link rel="stylesheet" href="css/style.css">
+    <title>Dashboard — DIOS CRM</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body {
-            background: #f5f5f5;
-            font-family: 'Montserrat', sans-serif;
+        :root {
+            --gold: #c9a961;
+            --sidebar-bg: #181c24;
+            --sidebar-txt: #e5e7eb;
+            --sidebar-active: #23283a;
+            --sidebar-border: #23283a;
+            --main-bg: #f4f6fa;
+            --card-bg: #ffffff;
+            --card-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            --muted: #8891a1;
+            --text: #1f2937;
         }
-        
-        .admin-wrapper {
-            display: flex;
-            min-height: 100vh;
-        }
-        
-        .admin-sidebar {
-            width: 250px;
-            background: #1a1a1a;
-            color: white;
-            padding: 2rem 0;
+
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; min-height: 100%; }
+        body { font-family: 'Montserrat', sans-serif; background: var(--main-bg); color: var(--text); }
+
+        .layout { display: flex; min-height: 100vh; }
+
+        .sidebar {
+            width: 230px;
             position: fixed;
-            height: 100vh;
-            overflow-y: auto;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            background: var(--sidebar-bg);
+            color: var(--sidebar-txt);
+            border-right: 1px solid var(--sidebar-border);
+            display: flex;
+            flex-direction: column;
+            z-index: 100;
         }
-        
-        .admin-sidebar h2 {
-            padding: 0 1.5rem;
-            font-size: 1.2rem;
-            margin: 0 0 2rem 0;
-            color: #c9a961;
+        .sidebar-logo {
+            padding: 1.4rem 1.2rem 1rem;
+            border-bottom: 1px solid var(--sidebar-border);
         }
-        
-        .admin-nav {
-            list-style: none;
-            padding: 0;
-            margin: 0;
+        .sidebar-logo .brand {
+            color: var(--gold);
+            font-size: 1.8rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
         }
-        
-        .admin-nav li {
-            margin: 0;
+        .sidebar-logo .sub {
+            color: var(--muted);
+            font-size: 0.8rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
         }
-        
-        .admin-nav a {
-            display: block;
-            padding: 0.75rem 1.5rem;
-            color: #ccc;
+
+        .sidebar-nav { flex: 1; padding: 1rem 0; }
+        .nav-section {
+            color: var(--muted);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            padding: 0.4rem 1.2rem;
+        }
+        .sidebar-nav a {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            color: var(--sidebar-txt);
             text-decoration: none;
-            transition: all 0.3s;
+            padding: 0.72rem 1.2rem;
+            font-weight: 600;
             border-left: 3px solid transparent;
         }
-        
-        .admin-nav a:hover,
-        .admin-nav a.active {
-            background: #2d2d2d;
-            color: #c9a961;
-            border-left-color: #c9a961;
-            padding-left: 1.2rem;
+        .sidebar-nav a > span:first-child {
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            background: rgba(201,169,97,0.18);
+            color: var(--gold);
+            font-size: 0.72rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
         }
-        
-        .admin-main {
-            flex: 1;
-            margin-left: 250px;
+        .sidebar-nav a:hover,
+        .sidebar-nav a.active {
+            color: var(--gold);
+            background: var(--sidebar-active);
+            border-left-color: var(--gold);
         }
-        
-        .admin-header {
-            background: white;
-            padding: 1.5rem 2rem;
+        .sidebar-nav a .count {
+            margin-left: auto;
+            font-size: 0.75rem;
+            background: var(--gold);
+            color: #111;
+            border-radius: 999px;
+            padding: 0.08rem 0.5rem;
+            font-weight: 700;
+        }
+
+        .sidebar-footer {
+            border-top: 1px solid var(--sidebar-border);
+            padding: 1rem 1.2rem;
+        }
+        .admin-chip {
+            margin-bottom: 0.8rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--sidebar-border);
+        }
+        .admin-chip .name {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #f3f4f6;
+        }
+        .admin-chip .role {
+            margin-top: 0.1rem;
+            font-size: 0.75rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .sidebar-footer a {
+            display: block;
+            color: var(--muted);
+            text-decoration: none;
+            padding: 0.35rem 0;
+            font-size: 0.95rem;
+        }
+        .sidebar-footer a:hover { color: var(--gold); }
+
+        .main {
+            width: 100%;
+            margin-left: 230px;
+            padding: 1.6rem;
+        }
+        .content {
+            max-width: 1180px;
+            margin: 0 auto;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .stat {
+            background: var(--card-bg);
+            border-radius: 12px;
+            border-top: 3px solid var(--gold);
+            box-shadow: var(--card-shadow);
+            padding: 1rem;
+            min-height: 116px;
+        }
+        .stat .label {
+            color: var(--muted);
+            font-size: 0.74rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .stat .value {
+            margin-top: 0.35rem;
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+        .stat .value.gold { color: var(--gold); }
+        .stat .sub {
+            margin-top: 0.25rem;
+            font-size: 0.82rem;
+            color: var(--muted);
+        }
+
+        .today-panel,
+        .table-panel {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            overflow: hidden;
+        }
+        .today-panel { margin-bottom: 1.3rem; }
+        .panel-header {
+            padding: 0.95rem 1.2rem;
+            border-bottom: 1px solid #edf0f4;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            gap: 0.8rem;
         }
-        
-        .admin-header h1 {
-            margin: 0;
-            font-size: 1.5rem;
-            color: #1a1a1a;
-        }
-        
-        .admin-user-info {
+        .panel-header h2,
+        .table-toolbar h2 { margin: 0; font-size: 1.5rem; }
+        .panel-header .today-date { color: var(--muted); font-size: 0.85rem; }
+
+        .today-item {
             display: flex;
             align-items: center;
             gap: 1rem;
+            padding: 0.95rem 1.2rem;
+            border-bottom: 1px solid #f2f4f7;
         }
-        
-        .admin-user-info p {
-            margin: 0;
-            font-size: 0.9rem;
+        .today-item:last-child { border-bottom: none; }
+        .today-time {
+            min-width: 70px;
+            text-align: center;
+            padding: 0.35rem 0.55rem;
+            background: #fef9ec;
+            color: #9c7b2f;
+            border-radius: 6px;
+            font-size: 0.84rem;
+            font-weight: 700;
         }
-        
-        .admin-user-info .name {
-            font-weight: 600;
-            color: #333;
+        .today-client { flex: 1; }
+        .today-client .cname { font-weight: 700; }
+        .today-client .cdetail { font-size: 0.84rem; color: var(--muted); margin-top: 0.1rem; }
+        .today-actions { display: flex; gap: 0.45rem; flex-wrap: wrap; }
+        .empty-today,
+        .empty-state {
+            padding: 2rem 1.2rem;
+            text-align: center;
+            color: var(--muted);
         }
-        
-        .admin-user-info .role {
-            color: #888;
-            font-size: 0.85rem;
+
+        .table-toolbar {
+            padding: 0.95rem 1.2rem;
+            border-bottom: 1px solid #edf0f4;
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            flex-wrap: wrap;
         }
-        
-        .btn-logout {
-            padding: 0.5rem 1rem;
-            background: #e74c3c;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.85rem;
-            text-decoration: none;
+        .toolbar-actions {
+            display: flex;
+            gap: 0.35rem;
+            flex-wrap: wrap;
         }
-        
-        .btn-logout:hover {
-            background: #c0392b;
+
+        .slots-panel {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            overflow: hidden;
+            margin-bottom: 1rem;
         }
-        
-        .admin-content {
-            padding: 2rem;
-        }
-        
-        .stats-grid {
+        .slots-panel .panel-header { border-bottom: 1px solid #edf0f4; }
+        .slots-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.7rem;
+            padding: 0.8rem;
         }
-        
-        .stat-card {
-            background: white;
-            padding: 1.5rem;
+        .slot-item {
+            border: 1px solid #edf0f4;
             border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            border-left: 4px solid #c9a961;
+            padding: 0.55rem 0.6rem;
         }
-        
-        .stat-card h3 {
-            margin: 0 0 0.5rem 0;
-            color: #888;
+        .slot-time { font-size: 0.85rem; font-weight: 700; }
+        .slot-meta { margin-top: 0.25rem; font-size: 0.75rem; color: var(--muted); }
+        .slot-stylists { margin-top: 0.2rem; font-size: 0.74rem; color: #5b6472; }
+        .table-toolbar h2 {
+            font-size: 1.9rem;
+            flex: 1;
+            min-width: 160px;
+        }
+
+        .view-tabs { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+        .view-tab {
+            text-decoration: none;
+            color: #5b6472;
+            background: #f2f4f7;
+            padding: 0.4rem 0.85rem;
+            border-radius: 7px;
             font-size: 0.9rem;
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .stat-card .number {
-            font-size: 2rem;
             font-weight: 600;
-            color: #1a1a1a;
-            margin: 0;
         }
-        
-        .stat-card .currency {
-            font-size: 1.5rem;
-            color: #c9a961;
+        .view-tab.active {
+            background: var(--gold);
+            color: #fff;
         }
-        
-        .filters {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
+
+        .search-box {
             display: flex;
-            gap: 1rem;
             align-items: center;
-        }
-        
-        .filters label {
-            margin: 0;
-            font-weight: 500;
-            color: #333;
-        }
-        
-        .filters select {
-            padding: 0.5rem 1rem;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 0.9rem;
-        }
-        
-        .bookings-table {
-            background: white;
+            border: 1px solid #d8dde5;
             border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            background: #fff;
+            min-width: 260px;
         }
-        
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 0;
-        }
-        
-        table thead {
-            background: #f9f9f9;
-            border-bottom: 2px solid #eee;
-        }
-        
-        table th {
-            padding: 1rem;
-            text-align: left;
-            font-weight: 600;
-            color: #333;
-            font-size: 0.9rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        table td {
-            padding: 1rem;
-            border-bottom: 1px solid #eee;
-            font-size: 0.95rem;
-        }
-        
-        table tbody tr:hover {
-            background: #f9f9f9;
-        }
-        
-        .badge {
-            display: inline-block;
-            padding: 0.35rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-        
-        .badge-pending {
-            background: #ffeaa7;
-            color: #d63031;
-        }
-        
-        .badge-confirmed {
-            background: #a8dadc;
-            color: #1d3557;
-        }
-        
-        .badge-paid {
-            background: #c7f0d8;
-            color: #06a77d;
-        }
-        
-        .badge-cancelled {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        
-        .action-buttons {
-            display: flex;
-            gap: 0.5rem;
-        }
-        
-        .btn-small {
-            padding: 0.4rem 0.8rem;
-            font-size: 0.8rem;
+        .search-box input {
             border: none;
-            border-radius: 4px;
-            cursor: pointer;
+            outline: none;
+            padding: 0.52rem 0.7rem;
+            width: 100%;
+            font: inherit;
+        }
+        .search-icon {
+            background: var(--gold);
+            color: #fff;
+            font-size: 0.9rem;
+            font-weight: 700;
+            padding: 0.55rem 0.85rem;
+            line-height: 1;
+        }
+
+        table { width: 100%; border-collapse: collapse; min-width: 860px; }
+        th {
+            text-align: left;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #6b7280;
+            padding: 0.82rem 1rem;
+            border-bottom: 1px solid #edf0f4;
+        }
+        td {
+            padding: 0.9rem 1rem;
+            border-bottom: 1px solid #f3f5f8;
+            vertical-align: middle;
+        }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover { background: #fafbfc; }
+        .is-hidden { display: none !important; }
+
+        .client-name { font-weight: 700; }
+        .client-phone,
+        .appt-time { color: var(--muted); font-size: 0.84rem; margin-top: 0.08rem; }
+        .appt-date { font-weight: 700; }
+
+        .btn-sm {
+            border: none;
+            border-radius: 6px;
+            padding: 0.35rem 0.75rem;
             text-decoration: none;
+            font-weight: 700;
+            font-size: 0.92rem;
+            cursor: pointer;
+            white-space: nowrap;
             display: inline-block;
-            transition: all 0.2s;
         }
-        
-        .btn-edit {
-            background: #3498db;
-            color: white;
+        .btn-view { background: #e0e7ff; color: #3730a3; }
+        .btn-done { background: #d1fae5; color: #065f46; }
+        .btn-wa { background: #dcfce7; color: #166534; }
+
+        .bottom-nav {
+            display: none;
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 60px;
+            background: var(--sidebar-bg);
+            border-top: 1px solid var(--sidebar-border);
+            z-index: 200;
         }
-        
-        .btn-edit:hover {
-            background: #2980b9;
+        .bottom-nav a {
+            flex: 1;
+            color: #c5ccda;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.82rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
         }
-        
-        .btn-cancel {
-            background: #e74c3c;
-            color: white;
-        }
-        
-        .btn-cancel:hover {
-            background: #c0392b;
-        }
-        
-        .btn-view {
-            background: #95a5a6;
-            color: white;
-        }
-        
-        .btn-view:hover {
-            background: #7f8c8d;
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 3rem 1rem;
-            color: #888;
-        }
-        
-        .empty-state p {
-            margin: 0;
-            font-size: 1.1rem;
-        }
-        
-        @media (max-width: 768px) {
-            .admin-wrapper {
-                flex-direction: column;
+        .bottom-nav a.active { color: var(--gold); }
+
+        @media (max-width: 1100px) {
+            .sidebar {
+                width: 64px;
             }
-            
-            .admin-sidebar {
+            .sidebar-logo .sub,
+            .sidebar-logo .brand,
+            .nav-section,
+            .sidebar-nav a span:last-child,
+            .sidebar-nav a .count,
+            .sidebar-footer {
+                display: none;
+            }
+            .sidebar-nav a {
+                justify-content: center;
+                padding: 0.78rem 0;
+                border-left: none;
+            }
+            .main {
+                margin-left: 64px;
+                padding: 1.2rem;
+            }
+            .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+
+        @media (max-width: 900px) {
+            .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .table-toolbar h2 {
                 width: 100%;
-                height: auto;
-                position: relative;
+                font-size: 1.4rem;
             }
-            
-            .admin-main {
+            .slots-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+
+        @media (max-width: 700px) {
+            .sidebar { display: none; }
+            .main {
                 margin-left: 0;
+                padding: 0.55rem 0.4rem 4.4rem;
             }
-            
-            .admin-header {
-                flex-direction: column;
-                gap: 1rem;
+            .bottom-nav {
+                display: flex;
             }
-            
-            .stats-grid {
-                grid-template-columns: 1fr;
+            .stats {
+                display: flex;
+                overflow-x: auto;
+                gap: 0.6rem;
+                padding-bottom: 0.2rem;
             }
-            
-            .filters {
-                flex-direction: column;
+            .stat {
+                min-width: 220px;
+                flex: 0 0 auto;
             }
-            
-            table {
-                font-size: 0.85rem;
+            .table-panel,
+            .today-panel {
+                border-radius: 10px;
             }
-            
-            table th, table td {
-                padding: 0.75rem 0.5rem;
+            .search-box {
+                min-width: 100%;
+                width: 100%;
             }
+
+            .table-panel table,
+            .table-panel thead,
+            .table-panel tbody,
+            .table-panel tr,
+            .table-panel th,
+            .table-panel td {
+                display: block;
+                width: 100%;
+            }
+            .table-panel thead { display: none; }
+            .table-panel tr {
+                margin: 0.7rem;
+                border-radius: 9px;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+                overflow: hidden;
+                background: #fff;
+            }
+            .table-panel td {
+                border: none;
+                padding: 0.52rem 0.8rem;
+            }
+            .table-panel td:before {
+                content: attr(data-label);
+                display: block;
+                font-size: 0.74rem;
+                color: var(--muted);
+                font-weight: 700;
+                margin-bottom: 0.08rem;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
+            .slots-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
-    <div class="admin-wrapper">
-        <!-- Sidebar -->
-        <aside class="admin-sidebar">
-            <h2>DIOS CRM</h2>
-            <ul class="admin-nav">
-                <li><a href="admin-dashboard.php" class="active">Dashboard</a></li>
-                <li><a href="admin-dashboard.php?status=pending">Pending</a></li>
-                <li><a href="admin-dashboard.php?status=confirmed">Confirmed</a></li>
-                <li><a href="admin-dashboard.php?status=paid">Paid</a></li>
-                <li><a href="admin-dashboard.php?status=completed">Completed</a></li>
-                <li><a href="admin-dashboard.php?status=cancelled">Cancelled</a></li>
-                <li><a href="admin-change-password.php" style="margin-top: 2rem;">Change Password</a></li>
-                <li><a href="admin-logout.php" style="border-left-color: #e74c3c;">Logout</a></li>
-            </ul>
-        </aside>
-        
-        <!-- Main Content -->
-        <div class="admin-main">
-            <header class="admin-header">
-                <h1>Dashboard</h1>
-                <div class="admin-user-info">
-                    <div>
-                        <p class="name"><?php echo htmlspecialchars($admin['first_name'] . ' ' . $admin['last_name'], ENT_QUOTES, 'UTF-8'); ?></p>
-                        <p class="role"><?php echo ucfirst($admin['role']); ?></p>
-                    </div>
-                    <a href="admin-change-password.php" style="padding: 0.5rem 1rem; background: #2980b9; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; text-decoration: none; display: inline-block; transition: all 0.2s; margin-right: 0.5rem;">Change Password</a>
-                    <a href="admin-logout.php" class="btn-logout">Logout</a>
+<div class="layout">
+
+    <!-- Sidebar (desktop/tablet) -->
+    <aside class="sidebar" aria-label="Sidebar">
+        <div class="sidebar-logo">
+            <div class="brand">DIOS</div>
+            <div class="sub">Hair | Makeup &mdash; CRM</div>
+        </div>
+        <nav class="sidebar-nav">
+            <div class="nav-section">Views</div>
+            <a href="?view=upcoming" class="<?php echo $view === 'upcoming' ? 'active' : ''; ?>">
+                <span aria-hidden="true">U</span><span>Upcoming</span>
+                <?php if ($stats['upcoming_bookings'] > 0): ?>
+                    <span class="count"><?php echo $stats['upcoming_bookings']; ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="?view=today" class="<?php echo $view === 'today' ? 'active' : ''; ?>">
+                <span aria-hidden="true">T</span><span>Today</span>
+                <?php if ($stats['today_bookings'] > 0): ?>
+                    <span class="count"><?php echo $stats['today_bookings']; ?></span>
+                <?php endif; ?>
+            </a>
+            <a href="?view=completed" class="<?php echo $view === 'completed' ? 'active' : ''; ?>">
+                <span aria-hidden="true">C</span><span>Completed</span>
+            </a>
+            <a href="?view=cancelled" class="<?php echo $view === 'cancelled' ? 'active' : ''; ?>">
+                <span aria-hidden="true">X</span><span>Cancelled</span>
+            </a>
+            <a href="?view=all" class="<?php echo $view === 'all' ? 'active' : ''; ?>">
+                <span aria-hidden="true">A</span><span>All Bookings</span>
+            </a>
+            <a href="admin-users.php">
+                <span aria-hidden="true">U</span><span>Users</span>
+            </a>
+            <a href="admin-settings.php">
+                <span aria-hidden="true">S</span><span>Settings</span>
+            </a>
+        </nav>
+        <div class="sidebar-footer">
+            <div class="admin-chip">
+                <div class="name"><?php echo htmlspecialchars(trim((string)(($admin['first_name'] ?? '') . ' ' . ($admin['last_name'] ?? ''))), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="role"><?php echo htmlspecialchars(ucfirst((string)($admin['role'] ?? 'admin')), ENT_QUOTES, 'UTF-8'); ?></div>
+            </div>
+            <a href="admin-change-password.php">Change Password</a>
+            <a href="admin-logout.php" style="color:#ef4444;">Logout</a>
+        </div>
+    </aside>
+
+    <!-- Bottom nav (mobile) -->
+    <nav class="bottom-nav" aria-label="Mobile Navigation">
+        <a href="?view=upcoming" class="<?php echo $view === 'upcoming' ? 'active' : ''; ?>">Upcoming</a>
+        <a href="?view=today" class="<?php echo $view === 'today' ? 'active' : ''; ?>">Today</a>
+        <a href="?view=completed" class="<?php echo $view === 'completed' ? 'active' : ''; ?>">Done</a>
+        <a href="?view=cancelled" class="<?php echo $view === 'cancelled' ? 'active' : ''; ?>">Cancel</a>
+        <a href="?view=all" class="<?php echo $view === 'all' ? 'active' : ''; ?>">All</a>
+    </nav>
+
+    <!-- Main -->
+    <div class="main">
+
+        <div class="content">
+
+            <!-- Stats -->
+            <div class="stats">
+                <div class="stat">
+                    <div class="label">Today's Appointments</div>
+                    <div class="value"><?php echo $stats['today_bookings']; ?></div>
+                    <div class="sub"><?php echo date('l, j M Y'); ?></div>
                 </div>
-            </header>
-            
-            <div class="admin-content">
-                <!-- Stats Cards -->
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <h3>Total Bookings</h3>
-                        <p class="number"><?php echo $stats['total_bookings']; ?></p>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Pending Confirmation</h3>
-                        <p class="number"><?php echo $stats['pending_bookings']; ?></p>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Today's Bookings</h3>
-                        <p class="number"><?php echo $stats['today_bookings']; ?></p>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Total Revenue</h3>
-                        <p class="number">
-                            <span class="currency">R</span><?php echo number_format($stats['total_revenue'], 2); ?>
-                        </p>
-                    </div>
+                <div class="stat">
+                    <div class="label">Upcoming (Paid)</div>
+                    <div class="value"><?php echo $stats['upcoming_bookings']; ?></div>
+                    <div class="sub">from today onwards</div>
                 </div>
-                
-                <!-- Filters -->
-                <div class="filters">
-                    <label for="statusFilter">Filter by Status:</label>
-                    <select id="statusFilter" onchange="window.location.href = this.value;">
-                        <option value="admin-dashboard.php" <?php echo $statusFilter === '' ? 'selected' : ''; ?>>All</option>
-                        <option value="admin-dashboard.php?status=pending" <?php echo $statusFilter === 'pending' ? 'selected' : ''; ?>>Pending</option>
-                        <option value="admin-dashboard.php?status=confirmed" <?php echo $statusFilter === 'confirmed' ? 'selected' : ''; ?>>Confirmed</option>
-                        <option value="admin-dashboard.php?status=paid" <?php echo $statusFilter === 'paid' ? 'selected' : ''; ?>>Paid</option>
-                        <option value="admin-dashboard.php?status=completed" <?php echo $statusFilter === 'completed' ? 'selected' : ''; ?>>Completed</option>
-                        <option value="admin-dashboard.php?status=cancelled" <?php echo $statusFilter === 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
-                    </select>
+                <div class="stat">
+                    <div class="label">This Week</div>
+                    <div class="value"><?php echo $stats['this_week_bookings']; ?></div>
+                    <div class="sub">paid &amp; completed</div>
                 </div>
-                
-                <!-- Bookings Table -->
-                <div class="bookings-table">
-                    <?php if (count($filteredBookings) > 0): ?>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Client Name</th>
-                                    <th>Date & Time</th>
-                                    <th>Service</th>
-                                    <th>Amount</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($filteredBookings as $booking): ?>
-                                    <tr>
-                                        <td>#<?php echo $booking['id']; ?></td>
-                                        <td><?php echo htmlspecialchars($booking['name'], ENT_QUOTES, 'UTF-8'); ?></td>
-                                        <td>
-                                            <?php echo date('M d, Y', strtotime($booking['appointment_date'])); ?>
-                                            <br>
-                                            <?php echo date('g:i A', strtotime($booking['appointment_time'])); ?>
-                                        </td>
-                                        <td><?php echo htmlspecialchars($booking['service'] ?? 'N/A', ENT_QUOTES, 'UTF-8'); ?></td>
-                                        <td>R<?php echo number_format($booking['amount'], 2); ?></td>
-                                        <td>
-                                            <span class="badge badge-<?php echo $booking['status']; ?>">
-                                                <?php echo ucfirst($booking['status']); ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <div class="action-buttons">
-                                                <a href="admin-booking-detail.php?id=<?php echo $booking['id']; ?>" class="btn-small btn-view">View</a>
-                                                <?php if ($booking['status'] !== 'cancelled' && $booking['status'] !== 'completed'): ?>
-                                                    <a href="admin-booking-edit.php?id=<?php echo $booking['id']; ?>" class="btn-small btn-edit">Edit</a>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    <?php else: ?>
-                        <div class="empty-state">
-                            <p>No bookings found.</p>
-                        </div>
-                    <?php endif; ?>
+                <div class="stat">
+                    <div class="label">Completed</div>
+                    <div class="value"><?php echo $stats['completed_bookings']; ?></div>
+                    <div class="sub">all time</div>
+                </div>
+                <div class="stat">
+                    <div class="label">Deposits Collected</div>
+                    <div class="value gold">R<?php echo number_format($stats['total_revenue'], 0); ?></div>
+                    <div class="sub">paid + completed</div>
                 </div>
             </div>
-        </div>
-    </div>
+
+            <!-- Today's quick panel (only show on upcoming/today) -->
+            <?php if (in_array($view, ['upcoming', 'today'], true) && !empty($today)): ?>
+            <div class="today-panel">
+                <div class="panel-header">
+                    <h2>Today's Schedule</h2>
+                    <span class="today-date"><?php echo date('l, j F Y'); ?></span>
+                </div>
+                <div class="today-list">
+                    <?php foreach ($today as $t): ?>
+                    <div class="today-item">
+                        <div class="today-time"><?php echo date('g:i A', strtotime((string)$t['appointment_time'])); ?></div>
+                        <div class="today-client">
+                            <div class="cname"><?php echo htmlspecialchars((string)$t['name'], ENT_QUOTES, 'UTF-8'); ?></div>
+                            <div class="cdetail">
+                                <?php echo htmlspecialchars(ucfirst(str_replace('-', ' ', (string)($t['service'] ?? 'N/A'))), ENT_QUOTES, 'UTF-8'); ?>
+                                &nbsp;·&nbsp;
+                                <?php echo htmlspecialchars((string)($t['phone'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>
+                                <?php if (!empty($t['stylist_name'])): ?>
+                                    &nbsp;·&nbsp; <?php echo htmlspecialchars((string)$t['stylist_name'], ENT_QUOTES, 'UTF-8'); ?>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="today-actions">
+                            <?php echo statusBadge((string)$t['status']); ?>
+                            <?php if (!empty($t['phone'])): ?>
+                                <a href="https://wa.me/<?php echo preg_replace('/\D/', '', (string)$t['phone']); ?>" target="_blank" rel="noopener" class="btn-sm btn-wa" title="WhatsApp">WhatsApp</a>
+                            <?php endif; ?>
+                            <?php if ($t['status'] === 'paid'): ?>
+                                <form method="post" style="margin:0;">
+                                    <input type="hidden" name="booking_id" value="<?php echo (int)$t['id']; ?>">
+                                    <input type="hidden" name="mark_complete" value="1">
+                                    <input type="hidden" name="view" value="<?php echo htmlspecialchars($view, ENT_QUOTES, 'UTF-8'); ?>">
+                                    <button type="submit" class="btn-sm btn-done" onclick="return confirm('Mark this booking as completed?')">✓ Done</button>
+                                </form>
+                            <?php endif; ?>
+                            <a href="admin-booking-detail.php?id=<?php echo (int)$t['id']; ?>" class="btn-sm btn-view">View</a>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php elseif (in_array($view, ['upcoming', 'today'], true) && empty($today)): ?>
+            <div class="today-panel">
+                <div class="panel-header">
+                    <h2>Today's Schedule</h2>
+                    <span class="today-date"><?php echo date('l, j F Y'); ?></span>
+                </div>
+                <div class="empty-today">No appointments scheduled for today.</div>
+            </div>
+            <?php endif; ?>
+
+            <div class="slots-panel">
+                <div class="panel-header">
+                    <h2>Slot Availability (Today)</h2>
+                    <span class="today-date"><?php echo date('d M Y'); ?></span>
+                </div>
+                <div class="slots-grid">
+                    <?php foreach ($todaySlotOverview as $slot): ?>
+                        <div class="slot-item">
+                            <div class="slot-time"><?php echo htmlspecialchars((string)$slot['time_label'], ENT_QUOTES, 'UTF-8'); ?></div>
+                            <div class="slot-meta">Booked: <?php echo (int)$slot['booked']; ?> | Open: <?php echo (int)$slot['open']; ?></div>
+                            <div class="slot-stylists">
+                                <?php if (!empty($slot['stylists'])): ?>
+                                    Stylists: <?php echo htmlspecialchars(implode(', ', array_unique((array)$slot['stylists'])), ENT_QUOTES, 'UTF-8'); ?>
+                                <?php else: ?>
+                                    Stylists: None assigned yet
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+
+            <!-- Bookings table -->
+            <div class="table-panel">
+                <div class="table-toolbar">
+                    <h2>All Bookings
+                        <span id="resultsCount" style="font-weight:400;color:#aaa;font-size:0.8rem;margin-left:0.5rem;">(<?php echo count($bookings); ?>)</span>
+                    </h2>
+
+                    <div class="view-tabs">
+                        <a href="?view=upcoming<?php echo $search !== '' ? '&q=' . urlencode($search) : ''; ?>" class="view-tab <?php echo $view === 'upcoming' ? 'active' : ''; ?>">Upcoming</a>
+                        <a href="?view=today<?php echo $search !== '' ? '&q=' . urlencode($search) : ''; ?>" class="view-tab <?php echo $view === 'today' ? 'active' : ''; ?>">Today</a>
+                        <a href="?view=completed<?php echo $search !== '' ? '&q=' . urlencode($search) : ''; ?>" class="view-tab <?php echo $view === 'completed' ? 'active' : ''; ?>">Completed</a>
+                        <a href="?view=cancelled<?php echo $search !== '' ? '&q=' . urlencode($search) : ''; ?>" class="view-tab <?php echo $view === 'cancelled' ? 'active' : ''; ?>">Cancelled</a>
+                        <a href="?view=all<?php echo $search !== '' ? '&q=' . urlencode($search) : ''; ?>" class="view-tab <?php echo $view === 'all' ? 'active' : ''; ?>">All</a>
+                    </div>
+
+                    <div class="toolbar-actions">
+                        <a href="<?php echo htmlspecialchars($exportUrl, ENT_QUOTES, 'UTF-8'); ?>" class="view-tab">Export CSV</a>
+                    </div>
+
+                    <div class="search-box">
+                        <input id="bookingSearch" type="text" name="q" value="<?php echo htmlspecialchars($search, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Search name, phone..." autocomplete="off">
+                        <span class="search-icon">Go</span>
+                    </div>
+                </div>
+
+                <?php if (!empty($bookings)): ?>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Client</th>
+                            <th>Date &amp; Time</th>
+                            <th>Service</th>
+                            <th>Location</th>
+                            <th>Stylist</th>
+                            <th>Deposit</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($bookings as $b): ?>
+                        <tr class="booking-row">
+                            <td data-label="#" style="color:#aaa;font-size:0.78rem;"><?php echo (int)$b['id']; ?></td>
+                            <td data-label="Client">
+                                <div class="client-name"><?php echo htmlspecialchars((string)$b['name'], ENT_QUOTES, 'UTF-8'); ?></div>
+                                <div class="client-phone">
+                                    <?php if (!empty($b['phone'])): ?>
+                                        <a href="tel:<?php echo htmlspecialchars((string)$b['phone'], ENT_QUOTES, 'UTF-8'); ?>" style="color:#888;text-decoration:none;"><?php echo htmlspecialchars((string)$b['phone'], ENT_QUOTES, 'UTF-8'); ?></a>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
+                            <td data-label="Date & Time">
+                                <div class="appt-date"><?php echo date('d M Y', strtotime((string)$b['appointment_date'])); ?></div>
+                                <div class="appt-time"><?php echo date('g:i A', strtotime((string)$b['appointment_time'])); ?></div>
+                            </td>
+                            <td data-label="Service">
+                                <?php echo htmlspecialchars(ucfirst(str_replace('-', ' ', (string)($b['service'] ?? 'N/A'))), ENT_QUOTES, 'UTF-8'); ?>
+                            </td>
+                            <td data-label="Location">
+                                <?php echo !empty($b['location']) ? htmlspecialchars(ucfirst((string)$b['location']), ENT_QUOTES, 'UTF-8') : 'N/A'; ?>
+                            </td>
+                            <td data-label="Stylist">
+                                <?php echo !empty($b['stylist_name']) ? htmlspecialchars((string)$b['stylist_name'], ENT_QUOTES, 'UTF-8') : 'N/A'; ?>
+                            </td>
+                            <td data-label="Deposit" style="font-weight:600;">R<?php echo number_format((float)$b['amount'], 0); ?></td>
+                            <td data-label="Status"><?php echo statusBadge((string)$b['status']); ?></td>
+                            <td data-label="Actions">
+                                <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;">
+                                    <a href="admin-booking-detail.php?id=<?php echo (int)$b['id']; ?>" class="btn-sm btn-view">View</a>
+                                    <?php if (!empty($b['phone'])): ?>
+                                        <a href="https://wa.me/<?php echo preg_replace('/\D/', '', (string)$b['phone']); ?>" target="_blank" rel="noopener" class="btn-sm btn-wa">WA</a>
+                                    <?php endif; ?>
+                                    <?php if ($b['status'] === 'paid'): ?>
+                                        <form method="post" style="margin:0;">
+                                            <input type="hidden" name="booking_id" value="<?php echo (int)$b['id']; ?>">
+                                            <input type="hidden" name="mark_complete" value="1">
+                                            <input type="hidden" name="view" value="<?php echo htmlspecialchars($view, ENT_QUOTES, 'UTF-8'); ?>">
+                                            <button type="submit" class="btn-sm btn-done" onclick="return confirm('Mark booking #<?php echo (int)$b['id']; ?> as completed?')">✓ Done</button>
+                                        </form>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <div id="searchNoResults" class="empty-state is-hidden">No matching bookings found.</div>
+                <?php else: ?>
+                    <div class="empty-state">
+                        <?php if ($search !== ''): ?>
+                            No bookings match "<strong><?php echo htmlspecialchars($search, ENT_QUOTES, 'UTF-8'); ?></strong>".
+                            <a href="?view=<?php echo urlencode($view); ?>" style="color:#c9a961;">Clear search</a>
+                        <?php else: ?>
+                            No bookings in this view yet.
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+        </div><!-- /content -->
+    </div><!-- /main -->
+</div><!-- /layout -->
+<script>
+    (function () {
+        var searchInput = document.getElementById('bookingSearch');
+        var rows = Array.prototype.slice.call(document.querySelectorAll('.booking-row'));
+        var countEl = document.getElementById('resultsCount');
+        var noResultsEl = document.getElementById('searchNoResults');
+        var tableEl = document.querySelector('.table-panel table');
+
+        if (!searchInput || rows.length === 0) {
+            return;
+        }
+
+        function applyFilter() {
+            var q = searchInput.value.toLowerCase().trim();
+            var visible = 0;
+
+            rows.forEach(function (row) {
+                var text = row.textContent.toLowerCase();
+                var match = q === '' || text.indexOf(q) !== -1;
+                row.classList.toggle('is-hidden', !match);
+                if (match) {
+                    visible += 1;
+                }
+            });
+
+            if (countEl) {
+                countEl.textContent = '(' + visible + ')';
+            }
+
+            if (noResultsEl && tableEl) {
+                var showEmpty = visible === 0;
+                noResultsEl.classList.toggle('is-hidden', !showEmpty);
+                tableEl.classList.toggle('is-hidden', showEmpty);
+            }
+        }
+
+        searchInput.addEventListener('input', applyFilter);
+        applyFilter();
+    })();
+</script>
 </body>
 </html>
